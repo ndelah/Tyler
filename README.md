@@ -4,30 +4,13 @@ Automatic tiling for macOS, with [Omarchy](https://github.com/basecamp/omarchy)'
 
 ## Install
 
-On a Mac, with [Rust](https://rustup.rs) 1.85 or newer. If `cargo` is not already installed:
+On a Mac, this one command installs Rust if `cargo` is missing, clones or updates the repo, builds a release binary, and copies it to `~/.local/bin/tyler-tiler`:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl -fsSL https://raw.githubusercontent.com/ndelah/Tyler/main/scripts/install.sh | sh
 ```
 
-Open a new terminal so `cargo` is on your `PATH`, then:
-
-```sh
-git clone https://github.com/ndelah/Tyler.git
-cd Tyler
-cargo build --release
-mkdir -p ~/.local/bin
-cp target/release/tyler-tiler ~/.local/bin/
-```
-
-`~/.local/bin` is not on the default macOS `PATH`. Add it once:
-
-```sh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-`scripts/install.sh` does the same clone, release build, and copy. It stops and prints the rustup command if `cargo` is missing.
+`~/.local/bin` is not on the default macOS `PATH`. The script prints the line to add. Until you do that, start it with `~/.local/bin/tyler-tiler`.
 
 ## Permissions
 
