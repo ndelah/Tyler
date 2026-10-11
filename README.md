@@ -4,15 +4,30 @@ Automatic tiling for macOS, with [Omarchy](https://github.com/basecamp/omarchy)'
 
 ## Install
 
-On a Mac:
+On a Mac, with [Rust](https://rustup.rs) 1.85 or newer. If `cargo` is not already installed:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ndelah/Tyler/main/scripts/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-That downloads the latest release binary (Apple Silicon or Intel) into `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`.
+Open a new terminal so `cargo` is on your `PATH`, then:
 
-There is no release binary yet. The GitHub Actions workflow that would build one is not on `main`, because the token used to push cannot update `.github/workflows`. Until that file is added and a `v*` tag is pushed, the install command fails and the script points at the [releases page](https://github.com/ndelah/Tyler/releases). On a Mac you can build it yourself with `cargo build --release` (see below).
+```sh
+git clone https://github.com/ndelah/Tyler.git
+cd Tyler
+cargo build --release
+mkdir -p ~/.local/bin
+cp target/release/tyler-tiler ~/.local/bin/
+```
+
+`~/.local/bin` is not on the default macOS `PATH`. Add it once:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+`scripts/install.sh` does the same clone, release build, and copy. It stops and prints the rustup command if `cargo` is missing.
 
 ## Permissions
 
@@ -45,11 +60,10 @@ That creates `~/.config/tyler/tyler.toml` and will not overwrite an existing fil
 
 ## Building it yourself
 
-Rust 1.85 or newer. Release builds are stripped, with link-time optimization, so the binary stays small. There is no GUI.
+Release builds are stripped, with link-time optimization. There is no GUI.
 
 ```sh
 cargo test
-cargo build --release          # on a Mac
 ```
 
 `cargo check --target aarch64-apple-darwin` typechecks the macOS backend on Linux. Linking that backend needs a Mac.
