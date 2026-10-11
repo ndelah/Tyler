@@ -6,6 +6,13 @@ rust-version = "1.85"
 description = "Automatic tiling window manager for macOS, with Omarchy's Hyprland defaults"
 license = "MIT"
 
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
 [dependencies]
 env_logger = { version = "0.11.11", default-features = false, features = ["auto-color", "humantime"] }
 log = "0.4.34"
