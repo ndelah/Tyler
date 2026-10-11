@@ -4,7 +4,7 @@ Automatic tiling for macOS, with [Omarchy](https://github.com/basecamp/omarchy)'
 
 ## Install
 
-On a Mac, this one command installs Rust if `cargo` is missing, clones or updates the repo, builds a release binary, and copies it to `~/.local/bin/tyler-tiler`:
+On a Mac, this one command installs Rust if `cargo` is missing, clones or updates `~/.local/share/tyler`, builds there, and copies the binary to `~/.local/bin/tyler-tiler`. It does not use your current directory.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ndelah/Tyler/main/scripts/install.sh | sh
@@ -43,9 +43,10 @@ That creates `~/.config/tyler/tyler.toml` and will not overwrite an existing fil
 
 ## Building it yourself
 
-Release builds are stripped, with link-time optimization. There is no GUI.
+Release builds are stripped, with link-time optimization. There is no GUI. From the fixed checkout:
 
 ```sh
+cd ~/.local/share/tyler
 cargo test
 ```
 
