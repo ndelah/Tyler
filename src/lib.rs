@@ -1,0 +1,17 @@
+//! tyler-tiler: a small automatic tiling window manager for macOS that mirrors
+//! Omarchy's Hyprland defaults.
+//!
+//! Everything except [`platform`] is platform-independent and unit tested on
+//! any host. The macOS backend (Accessibility API + CGEventTap) lives behind
+//! `cfg(target_os = "macos")`.
+
+pub mod action;
+pub mod config;
+pub mod geometry;
+pub mod keys;
+pub mod layout;
+pub mod platform;
+pub mod wm;
+
+/// Opaque window identifier. On macOS this is the `CGWindowID`.
+pub type WindowId = u64;

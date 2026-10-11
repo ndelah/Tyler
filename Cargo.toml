@@ -1,0 +1,23 @@
+[package]
+name = "tyler-tiler"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Automatic tiling window manager for macOS, with Omarchy's Hyprland defaults"
+license = "MIT"
+
+[dependencies]
+env_logger = { version = "0.11.11", default-features = false, features = ["auto-color", "humantime"] }
+log = "0.4.34"
+notify = "8.2.0"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.0.7"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility-sys = "0.2.0"
+core-foundation = "0.10.1"
+core-graphics = "0.25.0"
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSScreen"] }
+libc = "0.2"
+objc2-foundation = "0.3.2"
