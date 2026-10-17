@@ -5,6 +5,7 @@
   <key>CFBundleIdentifier</key><string>com.ndelah.tyler</string>
   <key>CFBundleName</key><string>Tyler</string>
   <key>CFBundleDisplayName</key><string>Tyler</string>
+  <key>CFBundleIconFile</key><string>Tyler</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundleVersion</key><string>2</string>

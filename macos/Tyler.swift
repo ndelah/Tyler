@@ -26,8 +26,10 @@ final class TylerApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "rectangle.split.3x1", accessibilityDescription: "Tyler")
+        let image = NSImage(named: "TylerMenuBar")
+        image?.size = NSSize(width: 15.4, height: 18)
         image?.isTemplate = true
+        image?.accessibilityDescription = "Tyler"
         statusItem.button?.image = image
         if image == nil { statusItem.button?.title = "T" }
         statusItem.button?.setAccessibilityLabel("Tyler window manager")
