@@ -1,71 +1,84 @@
-# tyler-tiler
+<p align="center">
+  <a href="https://tyler.delahousse.xyz/">
+    <img src="docs/assets/tyler-logo.png" alt="Tyler logo" width="160" height="160">
+  </a>
+</p>
 
-Automatic tiling for macOS, with an icon in the menu bar, a shortcuts window, and safe Quit. Windows tile as they open. SIP stays on: this uses the Accessibility API and a global hotkey tap, not a private Spaces API.
+<h1 align="center">Tyler</h1>
+<p align="center"><strong>A place for every window.</strong></p>
+<p align="center">Automatic window tiling for macOS. A little less arranging. A little more doing.</p>
+<p align="center">
+  <a href="https://tyler.delahousse.xyz/">Website & interactive demo</a> ·
+  <a href="docs/tutorial.md">User guide</a> ·
+  <a href="https://github.com/ndelah/Tyler/issues">Report a problem</a>
+</p>
 
-## Install
+Tyler arranges windows as you open them. New windows split the focused tile; close one, and its neighbor takes the space. Use keyboard shortcuts to focus, swap, resize, or let a window float.
 
-On a Mac, this command installs Rust if needed, builds Tyler.app, and installs it in `~/Applications`. It also installs the optional CLI in `~/.local/bin`. It does not use your current directory. Xcode Command Line Tools (`xcode-select --install`) are required for Swift and signing tools.
+It lives in your menu bar, with a shortcut guide and a Quit button. No terminal needs to stay open.
+
+## Get started
+
+You need a Mac and **Xcode Command Line Tools**. If you haven't installed the tools, run `xcode-select --install` in Terminal and finish that installation first.
+
+**1. Install Tyler.** Paste this into Terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ndelah/Tyler/main/scripts/install.sh | sh
 ```
 
-Open **Tyler.app** from `~/Applications`. Use its menu bar icon to **View Shortcuts**, open permission settings, view logs, retry startup, or **Quit Tyler**. No terminal stays open. Quit Tyler before running the installer again to update it.
+The installer builds Tyler from source, installs Rust if needed, and places **Tyler.app** in your home Applications folder. You can [read the installer](scripts/install.sh) first.
 
-## Tutorial and permissions
+**2. Give it permission.** Open **Tyler.app** from `~/Applications`. In its menu bar menu, choose **Open Accessibility Settings…** and enable **Tyler**. It starts tiling once access is granted.
 
-Follow the **[macOS tutorial](docs/tutorial.md)** for installation, terminal-app
-permissions, migration, every shortcut, customization, and troubleshooting.
+**3. Open a few windows.** Start with two resizable windows on your main display. Use **View Shortcuts…** in Tyler's menu whenever you need a reminder.
 
-Enable **Tyler** in System Settings → Privacy & Security → Accessibility.
-The icon remains available while permission is missing. After enabling it,
-Tyler retries startup automatically. If the worker cannot start, use **View Log**,
-check Input Monitoring for Tyler, then use **Retry Starting Tyler** or reopen it.
-When using the optional CLI, permission may belong to your terminal app instead.
+To update, choose **Quit Tyler**, then run the install command again. For setup help, see the [user guide](docs/tutorial.md).
 
-## Shortcuts
+## A few shortcuts to start
 
-`SUPER` now means **Fn/Globe**, wherever your keyboard exposes that key to macOS.
-Use Fn + B for Safari, Fn + arrows to focus, add Shift to swap, Fn + 1…0 for
-workspaces, and Fn + T to float. Fn + G fills the display, Fn + U maximizes,
-Fn + O opens Finder, Fn + X closes a window, and Fn + V toggles the scratchpad.
-Common macOS Fn-letter shortcuts are left available; Fn + arrows deliberately
-controls Tyler instead of Home/End/Page Up/Page Down while Tyler is running.
-The [complete shortcut table](docs/tutorial.md#5-complete-default-shortcut-reference)
-lists every default. Terminal, Safari, and Finder are the built-in app launchers.
+**Fn** is the Globe key on Apple keyboards. Hold it while pressing the other keys.
 
-**Upgrading:** an existing `super = "cmd"` or `"ctrl+alt+cmd"` or old binding table overrides the new
-defaults. Follow the [migration steps](docs/tutorial.md#2-migrate-an-existing-configuration).
-The conflicting original shortcuts remain an opt-in [legacy preset](config/omarchy.toml).
-Custom shortcuts in macOS or other utilities may still overlap; check them before use.
+| Shortcut | What it does |
+| --- | --- |
+| Fn + arrow | Focus a window in that direction |
+| Fn + Shift + arrow | Swap with a neighboring window |
+| Fn + T | Switch between tiled and floating |
+| Fn + J | Change a split from side-by-side to stacked, or back |
+| Fn + U | Fill the usable display; press again to restore |
+| Fn + 1…0 | Switch to workspace 1…10 |
+| Fn + Shift + 1…0 | Move a window to that workspace and follow it |
+| Fn + B | Open your browser (Safari by default) |
+| Fn + O | Open Finder |
+| Fn + Return | Open Terminal |
 
-## Start and quit
+[See all shortcuts →](docs/tutorial.md#5-complete-default-shortcut-reference)
 
-Open Tyler.app. Only the main display is tiled. Closing the shortcuts window leaves the menu bar app running.
+## Make it yours
 
-Choose **Quit Tyler** from the menu bar to stop the worker and restore parked windows. The optional `tyler-tiler` CLI still runs in the foreground and stops with Control-C. Run one mode at a time; a second worker is rejected.
-
-## Config
-
-It runs with built-in macOS defaults and no config file. `SUPER` is Fn/Globe.
-
-To change anything, write a file and edit it. Saving reloads it.
+Choose your preferred apps, change shortcuts, or adjust the gaps between windows. Create a configuration file with:
 
 ```sh
-tyler-tiler write-config
+~/.local/bin/tyler-tiler write-config
 ```
 
-That creates `~/.config/tyler/tyler.toml` and will not overwrite an existing file. Override the path with `TYLER_CONFIG`. A key in your file replaces the default. Set a chord to `unbind` to drop it. Other useful commands: `tyler-tiler bindings` and `tyler-tiler check-config`.
+Edit `~/.config/tyler/tyler.toml`. Saving reloads your changes. Tyler works with its built-in defaults if you don't create a file.
 
-## Building it yourself
+[Configuration examples →](docs/tutorial.md#7-customize-and-reload)
 
-Release builds are stripped, with link-time optimization. There is no GUI. From the fixed checkout:
+## Good to know
 
-```sh
-cd ~/.local/share/tyler
-cargo test
-```
+- **Main display only.** Windows on other displays are left alone.
+- **Workspaces are Tyler's own groups.** In this version, they aren't Mission Control desktops. Inactive windows are parked off to the side, and workspace groups reset when Tyler restarts.
+- **Quit from the menu bar.** This stops tiling and brings parked windows back. Closing the shortcut guide keeps Tyler running.
+- **Some apps need more room.** Minimum window sizes and dialogs can limit tiling or resizing.
+- **Built from source.** This is an ad-hoc signed app, rather than a notarized download. Accessibility access is required; System Integrity Protection stays enabled.
 
-`cargo check --target aarch64-apple-darwin` typechecks the macOS backend on Linux. Linking that backend needs a Mac.
+## Need a hand?
 
-The layout, the binding table, and what is intentionally not implemented yet are in [docs/design.md](docs/design.md).
+- [Setup, shortcuts, and troubleshooting](docs/tutorial.md)
+- [Build from source and use the CLI](docs/development.md)
+- [Technical design](docs/design.md)
+- [Report a problem or suggest an improvement](https://github.com/ndelah/Tyler/issues)
+
+Free and open source under the [MIT license](LICENSE).
