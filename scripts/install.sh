@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Rust if needed, build tyler-tiler from a fixed checkout, and copy it to ~/.local/bin.
+# Install Rust if needed, build Tyler.app and the optional CLI from a fixed checkout.
 # The build does not use the caller's current directory.
 #   curl -fsSL https://raw.githubusercontent.com/ndelah/Tyler/main/scripts/install.sh | sh
 set -eu
@@ -46,7 +46,11 @@ else
 fi
 
 cd "$src"
-cargo build --release
+if pgrep -f '[T]yler.app/Contents/MacOS/Tyler' >/dev/null; then
+  echo "Quit Tyler from its menu bar, then run this installer again." >&2
+  exit 1
+fi
+sh scripts/build-app.sh
 
 built="${src}/target/release/tyler-tiler"
 if [ ! -f "$built" ]; then
@@ -56,10 +60,15 @@ fi
 
 dest="${HOME}/.local/bin"
 mkdir -p "$dest"
-cp "$built" "${dest}/tyler-tiler"
+cp "$built" "${dest}/tyler-tiler.new"
+mv "${dest}/tyler-tiler.new" "${dest}/tyler-tiler"
 chmod 755 "${dest}/tyler-tiler"
 
 echo "Installed ${dest}/tyler-tiler"
+apps="${HOME}/Applications"
+mkdir -p "$apps"
+ditto "${src}/target/Tyler.app" "$apps/Tyler.app"
+echo "Installed ${apps}/Tyler.app — open it from Finder; no terminal needed."
 case ":${PATH}:" in
   *":${dest}:"*) ;;
   *)
@@ -69,5 +78,5 @@ case ":${PATH}:" in
 esac
 
 echo "Tutorial: https://github.com/ndelah/Tyler/blob/main/docs/tutorial.md"
-echo "SUPER is Control+Option+Command. Existing config files are preserved; see the tutorial to migrate."
-echo "For Accessibility, authorize your terminal app if tyler-tiler is not listed."
+echo "SUPER is Fn/Globe. Existing config files are preserved; see the tutorial to migrate."
+echo "For Accessibility, authorize Tyler when using Tyler.app."

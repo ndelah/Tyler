@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use tyler_tiler::action::{Action, FullscreenMode, WorkspaceTarget};
 use tyler_tiler::config::{self, Config};
 
 fn main() -> ExitCode {
@@ -18,6 +19,7 @@ fn main() -> ExitCode {
         }
         Some("check-config") => check_config(args.next()),
         Some("bindings") => print_bindings(args.next()),
+        Some("shortcuts") => print_shortcuts(args.next()),
         Some("write-config") => write_config(args.next()),
         Some(other) => {
             eprintln!("unknown command `{other}`\n");
@@ -37,12 +39,75 @@ Usage:
   tyler-tiler                     run the window manager (macOS)
   tyler-tiler check-config [FILE] validate a config, or the built-in default
   tyler-tiler bindings [FILE]     print the resolved keybindings
+  tyler-tiler shortcuts [FILE]    print readable shortcuts with physical modifiers
   tyler-tiler write-config [FILE] write the default config (refuses to overwrite)
 
 Config: $TYLER_CONFIG, else $XDG_CONFIG_HOME/tyler/tyler.toml,
         else ~/.config/tyler/tyler.toml
 A user file is layered on top of the built-in macOS defaults."
     );
+}
+
+fn print_shortcuts(path: Option<String>) -> ExitCode {
+    let config = match load(&resolve(path)) {
+        Ok(config) => config,
+        Err(code) => return code,
+    };
+    let mut bindings = config.bindings.clone();
+    bindings.sort_by_key(|b| b.chord.to_string());
+    for binding in bindings {
+        let title = match &binding.action {
+            Action::Launch(app) => format!("Open {}", config.resolve_app(app)),
+            Action::Close => "Close focused window".into(),
+            Action::ToggleFloat => "Toggle floating / tiled".into(),
+            Action::ToggleSplit => "Flip split direction".into(),
+            Action::Fullscreen(FullscreenMode::Fullscreen) => "Fill display".into(),
+            Action::Fullscreen(FullscreenMode::Maximized) => "Maximize in usable area".into(),
+            Action::Focus(dir) | Action::Swap(dir) => {
+                use tyler_tiler::geometry::Direction;
+                let direction = match dir {
+                    Direction::Left => "left",
+                    Direction::Right => "right",
+                    Direction::Up => "above",
+                    Direction::Down => "below",
+                };
+                format!(
+                    "{} window {direction}",
+                    if matches!(binding.action, Action::Focus(_)) {
+                        "Focus"
+                    } else {
+                        "Swap with"
+                    }
+                )
+            }
+            Action::Workspace(WorkspaceTarget::Index(n)) => format!("Switch to workspace {n}"),
+            Action::Workspace(WorkspaceTarget::Previous) => "Return to last workspace".into(),
+            Action::Workspace(WorkspaceTarget::Relative(n)) => format!(
+                "{} occupied workspace",
+                if *n > 0 { "Next" } else { "Previous" }
+            ),
+            Action::MoveToWorkspace { workspace, follow } => format!(
+                "Move to workspace {workspace}{}",
+                if *follow {
+                    " and follow"
+                } else {
+                    " without following"
+                }
+            ),
+            Action::Resize { dx, dy } => format!("Resize: width {dx:+}, height {dy:+} points"),
+            Action::CycleNext { forward } => {
+                format!("{} window", if *forward { "Next" } else { "Previous" })
+            }
+            Action::ToggleScratchpad => "Show / hide scratchpad".into(),
+            Action::MoveToScratchpad => "Send window to scratchpad".into(),
+            Action::Reload => "Reload configuration".into(),
+            Action::Quit => "Quit Tyler and restore windows".into(),
+            Action::Exec(cmd) => format!("Run {cmd}"),
+            Action::WebApp(url) => format!("Open {url}"),
+        };
+        println!("{:<30} {title}", binding.chord.to_string());
+    }
+    ExitCode::SUCCESS
 }
 
 fn resolve(path: Option<String>) -> PathBuf {

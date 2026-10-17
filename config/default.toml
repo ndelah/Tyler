@@ -1,9 +1,9 @@
-# Tyler defaults for macOS. SUPER = Control + Option + Command.
+# Tyler defaults for macOS. SUPER = Fn/Globe.
 # Shift adds a secondary action. Standard Command shortcuts pass through.
 # User settings override this file; default_bindings=false replaces the table.
 
 [general]
-super = "ctrl+alt+cmd"
+super = "fn"
 gaps_in = 5
 gaps_out = 10
 border_size = 2
@@ -21,24 +21,24 @@ browser = "Safari"
 file_manager = "Finder"
 
 [rules]
-float = ["System Settings", "System Information", "Calculator", "Archive Utility", "1Password"]
+float = ["Tyler", "System Settings", "System Information", "Calculator", "Archive Utility", "1Password"]
 
 [bindings]
 "SUPER + RETURN" = "launch terminal"
 "SUPER + B" = "launch browser"
-"SUPER + E" = "launch file_manager"
-"SUPER + W" = "killactive"
+"SUPER + O" = "launch file_manager"
+"SUPER + X" = "killactive"
 "SUPER + T" = "togglefloating"
 "SUPER + J" = "togglesplit"
-"SUPER + F" = "fullscreen"
-"SUPER + M" = "fullscreen maximized"
+"SUPER + G" = "fullscreen"
+"SUPER + U" = "fullscreen maximized"
 "SUPER + TAB" = "workspace e+1"
 "SUPER + SHIFT + TAB" = "workspace e-1"
 "SUPER + GRAVE" = "workspace previous"
 "SUPER + BRACKETRIGHT" = "cyclenext"
 "SUPER + BRACKETLEFT" = "cyclenext prev"
-"SUPER + S" = "togglespecialworkspace scratchpad"
-"SUPER + SHIFT + S" = "movetoworkspacesilent special:scratchpad"
+"SUPER + V" = "togglespecialworkspace scratchpad"
+"SUPER + SHIFT + V" = "movetoworkspacesilent special:scratchpad"
 "SUPER + R" = "reload"
 "SUPER + ESCAPE" = "exit"
 "SUPER + LEFT" = "movefocus l"

@@ -16,6 +16,7 @@ impl Modifiers {
     pub const CTRL: Modifiers = Modifiers(1 << 1);
     pub const ALT: Modifiers = Modifiers(1 << 2);
     pub const CMD: Modifiers = Modifiers(1 << 3);
+    pub const FN: Modifiers = Modifiers(1 << 4);
 
     pub fn contains(self, other: Modifiers) -> bool {
         self.0 & other.0 == other.0
@@ -32,6 +33,7 @@ impl Modifiers {
             "CTRL" | "CONTROL" => Some(Self::CTRL),
             "ALT" | "OPT" | "OPTION" => Some(Self::ALT),
             "CMD" | "COMMAND" => Some(Self::CMD),
+            "FN" | "GLOBE" => Some(Self::FN),
             _ => None,
         }
     }
@@ -68,6 +70,7 @@ impl fmt::Display for Modifiers {
             (Self::ALT, "ALT"),
             (Self::SHIFT, "SHIFT"),
             (Self::CMD, "CMD"),
+            (Self::FN, "FN"),
         ] {
             if self.contains(m) {
                 parts.push(name);

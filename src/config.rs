@@ -385,17 +385,14 @@ mod tests {
         assert_eq!(c.general.border_size, 2.0);
         assert!(c.dwindle.preserve_split);
         assert_eq!(c.dwindle.force_split, ForceSplit::Second);
-        assert_eq!(
-            c.general.super_mods,
-            Modifiers::CTRL | Modifiers::ALT | Modifiers::CMD
-        );
+        assert_eq!(c.general.super_mods, Modifiers::FN);
     }
 
     #[test]
     fn builtin_has_macos_core_bindings() {
         let c = Config::builtin();
         let s = c.general.super_mods;
-        assert_eq!(c.action_for(chord("SUPER + W", s)), Some(&Action::Close));
+        assert_eq!(c.action_for(chord("SUPER + X", s)), Some(&Action::Close));
         assert_eq!(
             c.action_for(chord("SUPER + T", s)),
             Some(&Action::ToggleFloat)
@@ -479,10 +476,21 @@ mod tests {
             "CMD + SHIFT + 5",
             "CTRL + CMD + Q",
             "ALT + TAB",
+            "FN + A",
+            "FN + C",
+            "FN + D",
+            "FN + E",
+            "FN + F",
+            "FN + H",
+            "FN + M",
+            "FN + N",
+            "FN + Q",
+            "FN + S",
+            "FN + W",
         ] {
             assert_eq!(c.action_for(chord(spec, Modifiers::NONE)), None, "{spec}");
         }
-        let required = Modifiers::CTRL | Modifiers::ALT | Modifiers::CMD;
+        let required = Modifiers::FN;
         assert!(c.bindings.iter().all(|b| b.chord.mods.contains(required)));
     }
 
@@ -509,7 +517,7 @@ mod tests {
             [apps]
             terminal = "Alacritty"
             [bindings]
-            "SUPER+W" = "unbind"
+            "SUPER+X" = "unbind"
             "SUPER + Q" = "exec say hello"
             "SUPER + H" = "movefocus l"
         "#;
@@ -518,7 +526,7 @@ mod tests {
         assert_eq!(c.general.gaps_in, 0.0);
         assert_eq!(c.general.gaps_out, 10.0);
         assert_eq!(c.resolve_app("terminal"), "Alacritty");
-        assert_eq!(c.action_for(chord("SUPER + W", s)), None);
+        assert_eq!(c.action_for(chord("SUPER + X", s)), None);
         assert_eq!(
             c.action_for(chord("SUPER + Q", s)),
             Some(&Action::Exec("say hello".into()))
@@ -544,11 +552,8 @@ mod tests {
     #[test]
     fn super_remap_is_detected_as_collision() {
         // Adding Shift to SUPER collapses the primary and secondary actions.
-        let err = Config::from_layers(
-            DEFAULT_CONFIG,
-            Some("[general]\nsuper = \"ctrl+alt+cmd+shift\"\n"),
-        )
-        .unwrap_err();
+        let err = Config::from_layers(DEFAULT_CONFIG, Some("[general]\nsuper = \"fn+shift\"\n"))
+            .unwrap_err();
         assert!(
             err.errors.iter().any(|e| e.contains("both resolve to")),
             "{err}"

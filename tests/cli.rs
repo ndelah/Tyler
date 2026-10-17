@@ -7,6 +7,21 @@ fn bin() -> Command {
 }
 
 #[test]
+fn readable_shortcuts_resolve_fn_and_app_names() {
+    let absent =
+        std::env::temp_dir().join(format!("tyler-default-absent-{}.toml", std::process::id()));
+    let output = bin().arg("shortcuts").arg(absent).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with("FN + B ") && line.contains("Open Safari")),
+        "{text}"
+    );
+    assert!(text.contains("Quit Tyler and restore windows"));
+}
+
+#[test]
 fn check_config_accepts_builtin_defaults() {
     let output = bin().arg("check-config").output().unwrap();
     assert!(

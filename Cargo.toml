@@ -1,9 +1,9 @@
 [package]
 name = "tyler-tiler"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Automatic tiling window manager for macOS, with Omarchy's Hyprland defaults"
+description = "Automatic tiling for macOS with Fn shortcuts and a menu bar app"
 license = "MIT"
 
 [profile.release]

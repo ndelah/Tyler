@@ -5,7 +5,7 @@
 //! of the main display (see [`crate::wm::Wm::hidden_origin`]). Quitting via the
 //! `exit` binding, or SIGINT/SIGTERM, moves those windows back on screen first.
 //!
-//! This module typechecks on a cross compile and has never run on a Mac.
+//! Native event-callback tests are separate from live permission checks.
 
 mod ax;
 mod hotkeys;
@@ -64,6 +64,15 @@ struct State {
 
 /// Entry point for the `tyler-tiler` binary on macOS.
 pub fn run() -> ! {
+    // Keep the file and its advisory lock alive until shutdown. A second tiler
+    // would compete for both keyboard events and window positions.
+    let _instance_lock = match instance_lock() {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("Tyler cannot start: {error}");
+            std::process::exit(1);
+        }
+    };
     if !trusted(false) {
         // Shows the system prompt the first time. The process still has to be
         // relaunched after the user ticks the checkbox.
@@ -117,10 +126,17 @@ pub fn run() -> ! {
         Err(error) => log::warn!("not watching {}: {error}", path.display()),
     }
 
-    if hotkeys::install(queue, shared_config).is_err() {
-        eprintln!("could not install the event tap. Check Accessibility and Input Monitoring for your terminal app (or tyler-tiler if listed), then fully quit and reopen it. See docs/tutorial.md.");
-        std::process::exit(1);
-    }
+    // CGEventTap invalidates its Mach port when dropped. Do not check a
+    // temporary Result with is_err(): that immediately destroys a successful
+    // tap. This owner must outlive the run loop below.
+    let _hotkey_tap = match hotkeys::install(queue, shared_config) {
+        Ok(tap) => tap,
+        Err(()) => {
+            eprintln!("could not install the event tap. Check Accessibility and Input Monitoring for Tyler (or your terminal when using the CLI), then relaunch. See docs/tutorial.md.");
+            std::process::exit(1);
+        }
+    };
+    log::info!("Tyler ready: global hotkey tap active");
 
     let mut context = CFRunLoopTimerContext {
         version: 0,
@@ -133,6 +149,26 @@ pub fn run() -> ! {
     unsafe { CFRunLoop::get_current().add_timer(&timer, kCFRunLoopCommonModes) };
     CFRunLoop::run_current();
     std::process::exit(0);
+}
+
+fn instance_lock() -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = std::env::temp_dir().join(format!("tyler-{}.lock", unsafe { libc::getuid() }));
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(std::io::Error::other(
+            "another Tyler instance is already running; quit it first",
+        ));
+    }
+    Ok(lock)
 }
 
 extern "C" fn on_timer(_timer: CFRunLoopTimerRef, info: *mut c_void) {

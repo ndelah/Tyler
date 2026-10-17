@@ -1,8 +1,8 @@
 # Tyler on macOS: installation and everyday use
 
 Tyler automatically arranges windows in a splitting layout on your main display.
-It runs in a terminal, uses macOS Accessibility APIs, and leaves SIP enabled.
-There is no menu bar icon. These instructions describe the macOS defaults in
+Tyler.app runs in the menu bar without a terminal, uses macOS Accessibility APIs,
+and leaves SIP enabled. These instructions describe the macOS defaults in
 `config/default.toml`; the original Omarchy shortcuts are now an optional preset.
 
 ## 1. Install or update
@@ -14,19 +14,23 @@ curl -fsSL https://raw.githubusercontent.com/ndelah/Tyler/main/scripts/install.s
 ```
 
 The script installs Rust if needed, builds in `~/.local/share/tyler`, and installs
-`~/.local/bin/tyler-tiler`. It does not build from your current directory.
+`~/Applications/Tyler.app` plus the optional `~/.local/bin/tyler-tiler`.
+Open Tyler.app from Finder. It requires Xcode Command Line Tools for the Swift
+launcher and signing tools; install them with `xcode-select --install` if needed.
+Quit Tyler before running the installer to update an existing app. It does not build from your current directory.
 If you prefer to inspect the installer first, download and read it before running it.
 To build the checkout you already cloned instead:
 
 ```sh
 cd ~/Workspace/Tyler
 git pull --ff-only
-cargo build --release
-./target/release/tyler-tiler check-config
+sh scripts/build-app.sh
+open target/Tyler.app
 ```
 
 Use the same executable path consistently when granting permissions and running
-Tyler. The examples below use the installer path. With a source build, substitute
+Tyler. The examples below use the installer path. For a source-built app, grant
+permission to `target/Tyler.app` instead; for source CLI commands, substitute
 `~/Workspace/Tyler/target/release/tyler-tiler`.
 
 You can run the installed binary by its full path without changing your PATH.
@@ -39,8 +43,8 @@ export PATH="$HOME/.local/bin:$PATH"
 ## 2. Migrate an existing configuration
 
 An existing configuration overrides the new defaults. In particular,
-`super = "cmd"` keeps the old conflicting Command shortcuts. Stop Tyler with
-Control-C before migrating. To use the new defaults while preserving your file:
+`super = "cmd"` or `"ctrl+alt+cmd"` keeps the previous modifier. Quit Tyler
+from its menu bar (or use Control-C for the CLI) before migrating. To use the new defaults while preserving your file:
 
 ```sh
 mv ~/.config/tyler/tyler.toml ~/.config/tyler/tyler.toml.backup
@@ -50,35 +54,31 @@ mv ~/.config/tyler/tyler.toml ~/.config/tyler/tyler.toml.backup
 Only run `mv` if the file exists; choose a different backup name if that name is
 already taken. If you use `TYLER_CONFIG` or `XDG_CONFIG_HOME`, back up that file
 instead. Reapply desired gaps, floating rules, and app names manually, leaving
-`super = "ctrl+alt+cmd"`. Do not copy the entire old binding table back.
+`super = "fn"`. Do not copy the entire old binding table back.
 
 If no configuration exists, run `~/.local/bin/tyler-tiler write-config` now.
 This also creates the directory needed for reliable configuration watching.
 
 ## 3. Grant macOS permissions
 
-1. Run `~/.local/bin/tyler-tiler`. If Accessibility is missing, Tyler prints
-   guidance and exits; macOS may also show a prompt.
-2. Open **System Settings → Privacy & Security → Accessibility**.
-3. Enable the application macOS associates with the request. For a command-line
-   program this can be its hosting terminal: **Terminal**, **iTerm**, **Ghostty**,
-   **Warp**, or an editor hosting an integrated terminal. Tyler need not appear
-   as a separate application.
-4. If the terminal is missing, click **+** and select it. For Apple Terminal,
-   press **Command-Shift-G** in the file picker, enter
-   `/System/Applications/Utilities/Terminal.app`, and choose **Open**.
-5. Fully quit and reopen the terminal application, then run Tyler again.
-6. If Tyler reports that the event tap cannot start, check **Privacy & Security →
-   Input Monitoring** for that same application; enable it if requested and
-   fully quit/reopen the application again. If macOS lists `tyler-tiler` itself,
-   authorize that entry as well. Exact attribution can vary by launch method.
+1. Open **Tyler.app**. A tiling icon appears in the menu bar, even before access
+   is granted. There is no Dock icon and no terminal window to leave open.
+2. Open its menu and choose **Open Accessibility Settings…**. Enable **Tyler**.
+   If missing, use **+** and select `~/Applications/Tyler.app`.
+3. Tyler checks for the grant every two seconds and starts the tiling worker
+   when it is allowed. If macOS requires a relaunch, quit and reopen Tyler.app.
+4. If the menu reports **Tiling could not start**, use **View Log…**. If the event
+   tap could not start, choose **Open Input Monitoring Settings…**, authorize
+   Tyler if requested, then **Retry Starting Tyler** or quit and reopen the app.
+5. Use **View Shortcuts…** for the current bindings and resolved Super modifier.
+   Use **Quit Tyler** to restore parked windows and exit. Closing only the
+   shortcuts window keeps the menu bar app running.
 
-Granting permission to a terminal also permits other programs launched through
-that terminal to use that access. A CLI executable is not an `.app` bundle.
-Switching terminals, changing the executable location, or rebuilding can require
-renewed authorization. If an old entry stops working, remove that specific entry,
-add it again, and restart the host. Do not disable SIP, run Tyler with `sudo`, or
-edit the TCC permissions database.
+The bundle identifier is `com.ndelah.tyler`. Local builds are ad-hoc signed;
+replacing a build can require renewed authorization. For the optional CLI,
+macOS may attribute access to its hosting terminal instead: enable that terminal
+under Accessibility, then fully quit/reopen it. Do not disable SIP, use sudo to
+run Tyler, or edit the TCC database.
 
 Apple's instructions: [Accessibility access](https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac)
 and [Input Monitoring](https://support.apple.com/guide/mac-help/control-access-to-input-monitoring-on-mac-mchl4cedafb6/mac).
@@ -88,29 +88,31 @@ and [Input Monitoring](https://support.apple.com/guide/mac-help/control-access-t
 ```sh
 ~/.local/bin/tyler-tiler check-config
 ~/.local/bin/tyler-tiler bindings
-~/.local/bin/tyler-tiler
+open ~/Applications/Tyler.app
 ```
 
-Keep that terminal open. Run only one instance of Tyler. Open two ordinary,
+No terminal needs to remain open. Do not start the CLI alongside the app. Run only one instance of Tyler. Open two ordinary,
 resizable windows on the main display; they should tile automatically.
 
-Throughout this tutorial, **SUPER means hold Control + Option + Command**
-(**⌃⌥⌘**) together, then press the final key. For example, SUPER + Left means
-⌃⌥⌘←. Add Shift only where shown. Either side's modifier keys work.
+Throughout this tutorial, **SUPER means hold Fn/Globe**, then press the final
+key. For example, SUPER + B means Fn + B. Add Shift only where shown.
+macOS does not expose a separate right-Fn flag; either Fn/Globe key works if the
+keyboard reports it. Some external keyboards handle Fn entirely in firmware;
+those keys cannot be used as a macOS modifier without keyboard-specific remapping.
 
 Try SUPER + Left/Right to change focus, SUPER + Shift + Left/Right to swap,
 SUPER + T to float the focused window, and the same shortcut to tile it again.
 SUPER + 2 selects an empty workspace; SUPER + 1 returns. SUPER + Shift + 2 moves
 the focused window to workspace 2 and follows it.
 
-**Stop safely:** press SUPER + Escape from any app, or Control-C in Tyler's
-terminal. Tyler restores parked windows to the screen before exiting.
-SUPER + W closes the focused window and may trigger its app's save prompt.
+**Stop safely:** choose **Quit Tyler** from its menu bar. In CLI mode, use
+SUPER + Escape or Control-C. Tyler restores parked windows to the screen before exiting.
+SUPER + X closes the focused window and may trigger its app's save prompt.
 Command-Q retains its usual meaning: quit the foreground application.
 
 ## 5. Complete default shortcut reference
 
-Every chord below includes Control + Option + Command. The notation matches
+Every chord below includes Fn/Globe. The notation matches
 the configuration file. `code:10` through `code:19` mean the physical number-row
 keys 1 through 0; 0 selects workspace 10. `code:20` and `code:21` are the physical
 US minus and equals positions. Letter and punctuation names also refer to US
@@ -121,21 +123,21 @@ layouts. Shift does not change which physical key is matched.
 | --- | --- |
 | `SUPER + RETURN` | Open or activate Terminal |
 | `SUPER + B` | Open or activate Safari |
-| `SUPER + E` | Open or activate Finder |
-| `SUPER + W` | Close focused window |
+| `SUPER + O` | Open or activate Finder |
+| `SUPER + X` | Close focused window |
 | `SUPER + T` | Toggle floating / tiled |
 | `SUPER + J` | Flip the parent split axis |
-| `SUPER + F` | Toggle filling the display (Tyler layout, not a native fullscreen Space) |
-| `SUPER + M` | Toggle filling usable area, respecting Dock/menu bar and outer gaps |
+| `SUPER + G` | Toggle filling the display (Tyler layout, not a native fullscreen Space) |
+| `SUPER + U` | Toggle filling usable area, respecting Dock/menu bar and outer gaps |
 | `SUPER + TAB` | Next occupied workspace |
 | `SUPER + SHIFT + TAB` | Previous occupied workspace |
 | `SUPER + GRAVE` | Return to the last workspace |
 | `SUPER + BRACKETRIGHT` | Next window |
 | `SUPER + BRACKETLEFT` | Previous window |
-| `SUPER + S` | Show/hide scratchpad |
-| `SUPER + SHIFT + S` | Send focused window to hidden scratchpad |
+| `SUPER + V` | Show/hide scratchpad |
+| `SUPER + SHIFT + V` | Send focused window to hidden scratchpad |
 | `SUPER + R` | Reload configuration |
-| `SUPER + ESCAPE` | Quit Tyler and restore parked windows |
+| `SUPER + ESCAPE` | Stop tiling and restore parked windows |
 | `SUPER + LEFT` | Focus window left |
 | `SUPER + SHIFT + LEFT` | Swap with window left |
 | `SUPER + RIGHT` | Focus window right |
@@ -181,29 +183,32 @@ an app and do not necessarily create a new window if it is already running.
 
 ## 6. Preserve Mac shortcuts and check personal conflicts
 
-The defaults leave Command-Q/W/F/T/S, Command-Tab, Command-grave, Spotlight,
-screenshots, Control-arrow Mission Control/Spaces, and ordinary editing/navigation
-shortcuts untouched. Tyler matches exact modifier combinations; adding the three
-SUPER modifiers creates separate chords. It does not bind the Control-Option
-VoiceOver prefix by itself. The default launchers use built-in macOS apps.
+Standard Command-Q/W/F/T/S, Command-Tab, Spotlight, screenshots, and
+Control-arrow Mission Control/Spaces remain available. Tyler avoids the common
+macOS Fn + A/C/D/E/F/H/M/N/Q/S/W letter shortcuts. It uses Fn + G for its own
+fullscreen, Fn + U for maximize, Fn + O for Finder, and Fn + V for scratchpad.
+Fn + arrows intentionally replaces their usual Home/End/Page Up/Page Down
+behavior while Tyler runs. Fn + Return opens Terminal instead of keypad Enter.
+Fn + Escape stops tiling; on some keyboards that combination is handled in
+firmware and cannot reach an app. Use the menu bar Quit in that case.
 
-No global shortcut scheme can guarantee compatibility with every app, custom
-macOS setting, keyboard remapper, or accessibility configuration. In particular,
-check Rectangle/Magnet, Raycast/Alfred, BetterTouchTool, Karabiner, and VoiceOver
-if you use them. Three modifiers plus an arrow can already be assigned by another
-window manager. Review **System Settings → Keyboard → Keyboard Shortcuts** and
-the other utility's shortcut settings. Stop the other tiler while trying Tyler.
-If a chord overlaps an accessibility workflow, unbind or remap it in Tyler.
+No global scheme guarantees compatibility with custom shortcuts or remappers.
+Check other window managers, Raycast/Alfred, BetterTouchTool, Karabiner, and
+VoiceOver if installed. For Fn pressed by itself, **System Settings → Keyboard →
+Press Globe/Fn key to → Do Nothing** can prevent input-source/emoji activation.
+This does not disable all system Fn combinations. A keyboard's own firmware Fn
+key may not be visible to macOS at all.
 
 Apple's [Mac keyboard shortcut reference](https://support.apple.com/en-us/102650)
-lists the standard combinations used as the compatibility baseline.
+lists system combinations. You can return to a multi-key Super with
+`super = "ctrl+alt+cmd"` in the config if your keyboard does not emit Fn.
 
 ## 7. Customize and reload
 
 Edit `~/.config/tyler/tyler.toml` (or the file selected by `TYLER_CONFIG`, then
 `XDG_CONFIG_HOME`). Files are layered over the defaults. Save to reload, or press
 SUPER + R. Invalid hot reloads keep the previous working configuration; read
-Tyler's terminal output for the error. Always validate before restarting:
+**View Log** from the menu for the error (or terminal output in CLI mode). Always validate before restarting:
 
 ```sh
 ~/.local/bin/tyler-tiler check-config
@@ -214,7 +219,7 @@ Example overrides (merge into existing sections; TOML cannot repeat a section):
 
 ```toml
 [general]
-super = "ctrl+alt+cmd"
+super = "fn"
 gaps_in = 5
 gaps_out = 10
 
@@ -224,13 +229,13 @@ browser = "Safari"
 file_manager = "Finder"
 
 [bindings]
-"SUPER + W" = "unbind" # leave window closing exclusively to the app
+"SUPER + X" = "unbind" # leave window closing exclusively to the app
 "SUPER + SHIFT + B" = "webapp https://chatgpt.com"
 "SUPER + SHIFT + D" = "movetoworkspacesilent 2" # send to 2 without following
 ```
 
 To define everything yourself, set `default_bindings = false` in `[general]`.
-Keep an `exit` binding or use Control-C. Modifier combinations that collapse
+Keep an `exit` binding or use the menu bar Quit (Control-C for CLI mode). Modifier combinations that collapse
 distinct defaults (for example, adding Shift to SUPER) are rejected as duplicates.
 Avoid changing SUPER to Command alone: it intercepts normal application shortcuts.
 
@@ -251,12 +256,12 @@ are not the macOS defaults documented above.
 - Some apps reject Accessibility moves/resizes or enforce minimum sizes. Dialogs
   and configured floating apps are not expected to tile like regular windows.
 - Secure Input in a terminal or password field can prevent global hotkeys from
-  arriving. Leave the secure field or use Control-C in Tyler's terminal to stop.
+  arriving. Leave the secure field or use **Quit Tyler** from its menu.
 - After a crash or force-quit, windows can remain parked. Activate them through
   the Dock/Command-Tab and drag them back. Prefer Tyler's exit shortcut or
   Control-C over force-quitting.
-- This is a source-built CLI, not a signed/notarized app bundle or an App Store
-  release. “macOS-friendly” here describes shortcut and permission behavior;
+- This is a source-built, ad-hoc signed app bundle with an optional CLI,
+  not a Developer ID notarized or App Store release. “macOS-friendly” here describes shortcut and permission behavior;
   it is not a certification claim. The backend currently uses the undocumented
   `_AXUIElementGetWindow` symbol to match windows; see [design notes](design.md).
 
@@ -265,7 +270,7 @@ are not the macOS defaults documented above.
 After installation, use two disposable, resizable windows to try focus, swap,
 float, split, both fullscreen modes, width/height resize, workspace moves,
 workspace cycling, scratchpad, launchers, reload, close, and safe quit using the
-table. Try ordinary Command-F/T/S, Command-Tab, Spotlight, and screenshots too.
+table and menu. Confirm View Shortcuts opens and the icon stays when its window closes. Try ordinary Command-F/T/S, Command-Tab, Spotlight, and screenshots too.
 For workspace cycling, first put windows in two workspaces. For resize, try both
 split orientations. A hardware test is needed because automated parsing and
 layout tests cannot establish TCC authorization, event delivery, or another
@@ -280,13 +285,12 @@ RUST_LOG=debug ~/.local/bin/tyler-tiler
 When reporting a problem, include macOS version, keyboard layout, launch terminal,
 the output of `bindings`, and whether the action fails for all apps or one app.
 
-## Automated verification
+## Verification scope
 
-On an Intel Mac, `cargo test` passed 62 library tests and 4 CLI tests.
-Native CoreGraphics events were constructed locally for every default binding
-and passed into the callback to check dispatch, autorepeat, and modifier-first
-release. No events were posted and no global event tap was installed by these
-tests. Common Mac shortcuts pass through; all 53 default bindings are documented
-and parse without collisions. Layout, workspace, scratchpad, and quit behavior
-are covered at the command-model level. Live permissions and cross-app window
-control remain interactive checks, as described above.
+Automated tests cover the config, layout, workspace command model, and every
+default binding through locally constructed CoreGraphics events. They cover Fn
+modifier parsing, translated navigation keys, and modifier-first key release.
+These tests do not post global keyboard input. The app bundle is compiled and
+its signature checked on macOS. Live TCC authorization and cross-app behavior
+still require the interactive checks above. The menu's active state is shown
+only after the worker logs that it has installed its global event tap.
