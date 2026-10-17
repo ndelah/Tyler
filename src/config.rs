@@ -1,4 +1,4 @@
-//! TOML configuration: an embedded Omarchy-equivalent default layered with
+//! TOML configuration: embedded macOS defaults layered with
 //! the user's `~/.config/tyler/tyler.toml`, compiled into a hotkey table, plus
 //! a debounced file watcher for hot reload.
 
@@ -76,7 +76,7 @@ impl Config {
             .any(|a| a.eq_ignore_ascii_case(app_name))
     }
 
-    /// The built-in Omarchy-equivalent configuration.
+    /// The built-in macOS configuration.
     pub fn builtin() -> Config {
         Config::from_layers(DEFAULT_CONFIG, None).expect("embedded default config is valid")
     }
@@ -385,13 +385,16 @@ mod tests {
         assert_eq!(c.general.border_size, 2.0);
         assert!(c.dwindle.preserve_split);
         assert_eq!(c.dwindle.force_split, ForceSplit::Second);
-        assert_eq!(c.general.super_mods, Modifiers::CMD);
+        assert_eq!(
+            c.general.super_mods,
+            Modifiers::CTRL | Modifiers::ALT | Modifiers::CMD
+        );
     }
 
     #[test]
-    fn builtin_has_omarchy_core_bindings() {
+    fn builtin_has_macos_core_bindings() {
         let c = Config::builtin();
-        let s = Modifiers::CMD;
+        let s = c.general.super_mods;
         assert_eq!(c.action_for(chord("SUPER + W", s)), Some(&Action::Close));
         assert_eq!(
             c.action_for(chord("SUPER + T", s)),
@@ -426,13 +429,6 @@ mod tests {
                     follow: true
                 })
             );
-            assert_eq!(
-                c.action_for(chord(&format!("SUPER + SHIFT + ALT + {key}"), s)),
-                Some(&Action::MoveToWorkspace {
-                    workspace: n,
-                    follow: false
-                })
-            );
         }
         assert_eq!(
             c.action_for(chord("SUPER + MINUS", s)),
@@ -441,8 +437,68 @@ mod tests {
                 dy: 0.0
             })
         );
-        assert_eq!(c.resolve_app("terminal"), "Ghostty");
+        assert_eq!(c.resolve_app("terminal"), "Terminal");
         assert_eq!(c.resolve_app("Safari"), "Safari");
+    }
+
+    #[test]
+    fn defaults_preserve_common_macos_shortcuts() {
+        let c = Config::builtin();
+        for spec in [
+            "CMD + Q",
+            "CMD + W",
+            "CMD + F",
+            "CMD + T",
+            "CMD + S",
+            "CMD + C",
+            "CMD + V",
+            "CMD + X",
+            "CMD + Z",
+            "CMD + H",
+            "CMD + M",
+            "CMD + N",
+            "CMD + TAB",
+            "CMD + SHIFT + TAB",
+            "CMD + GRAVE",
+            "CMD + SPACE",
+            "CMD + COMMA",
+            "CMD + 1",
+            "CMD + LEFT",
+            "CMD + SHIFT + LEFT",
+            "ALT + LEFT",
+            "CTRL + UP",
+            "CTRL + DOWN",
+            "CTRL + LEFT",
+            "CTRL + RIGHT",
+            "CTRL + CMD + F",
+            "CTRL + SPACE",
+            "CTRL + ALT + LEFT",
+            "CTRL + ALT + F",
+            "CMD + SHIFT + 3",
+            "CMD + SHIFT + 4",
+            "CMD + SHIFT + 5",
+            "CTRL + CMD + Q",
+            "ALT + TAB",
+        ] {
+            assert_eq!(c.action_for(chord(spec, Modifiers::NONE)), None, "{spec}");
+        }
+        let required = Modifiers::CTRL | Modifiers::ALT | Modifiers::CMD;
+        assert!(c.bindings.iter().all(|b| b.chord.mods.contains(required)));
+    }
+
+    #[test]
+    fn tutorial_covers_every_default_binding() {
+        let tutorial = include_str!("../docs/tutorial.md");
+        let c = Config::builtin();
+        for b in &c.bindings {
+            assert!(
+                tutorial.contains(&format!("`{}`", b.spec)),
+                "undocumented: {}",
+                b.spec
+            );
+            assert_eq!(c.action_for(b.chord), Some(&b.action));
+        }
+        assert!(Config::from_layers(include_str!("../config/omarchy.toml"), None).is_ok());
     }
 
     #[test]
@@ -458,7 +514,7 @@ mod tests {
             "SUPER + H" = "movefocus l"
         "#;
         let c = Config::from_layers(DEFAULT_CONFIG, Some(user)).unwrap();
-        let s = Modifiers::CMD;
+        let s = c.general.super_mods;
         assert_eq!(c.general.gaps_in, 0.0);
         assert_eq!(c.general.gaps_out, 10.0);
         assert_eq!(c.resolve_app("terminal"), "Alacritty");
@@ -487,9 +543,12 @@ mod tests {
 
     #[test]
     fn super_remap_is_detected_as_collision() {
-        // SUPER = alt makes "SUPER + ALT + F" collide with "SUPER + F".
-        let err =
-            Config::from_layers(DEFAULT_CONFIG, Some("[general]\nsuper = \"alt\"\n")).unwrap_err();
+        // Adding Shift to SUPER collapses the primary and secondary actions.
+        let err = Config::from_layers(
+            DEFAULT_CONFIG,
+            Some("[general]\nsuper = \"ctrl+alt+cmd+shift\"\n"),
+        )
+        .unwrap_err();
         assert!(
             err.errors.iter().any(|e| e.contains("both resolve to")),
             "{err}"

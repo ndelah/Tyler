@@ -1,5 +1,5 @@
-//! tyler-tiler: a small automatic tiling window manager for macOS that mirrors
-//! Omarchy's Hyprland defaults.
+//! tyler-tiler: automatic tiling for macOS with Omarchy-inspired layouts
+//! and shortcuts that preserve standard Command-key actions.
 //!
 //! Everything except [`platform`] is platform-independent and unit tested on
 //! any host. The macOS backend (Accessibility API + CGEventTap) lives behind

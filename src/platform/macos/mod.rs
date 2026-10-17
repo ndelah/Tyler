@@ -70,8 +70,8 @@ pub fn run() -> ! {
         let _ = trusted(true);
         eprintln!(
             "tyler-tiler needs Accessibility permission.\n\
-             System Settings → Privacy & Security → Accessibility, enable tyler-tiler, then relaunch.\n\
-             The hotkey tap also needs Input Monitoring on macOS 13+."
+             System Settings → Privacy & Security → Accessibility: enable your terminal app (Terminal, iTerm, etc.) or tyler-tiler if listed, then fully quit and reopen the terminal.\n\
+             If the event tap cannot start, check Input Monitoring for the same app. See docs/tutorial.md."
         );
         std::process::exit(1);
     }
@@ -118,7 +118,7 @@ pub fn run() -> ! {
     }
 
     if hotkeys::install(queue, shared_config).is_err() {
-        eprintln!("could not install the event tap. Grant Input Monitoring as well as Accessibility, then relaunch.");
+        eprintln!("could not install the event tap. Check Accessibility and Input Monitoring for your terminal app (or tyler-tiler if listed), then fully quit and reopen it. See docs/tutorial.md.");
         std::process::exit(1);
     }
 

@@ -7,7 +7,8 @@
 //! loop timer drains the queue.
 //!
 //! Creating the tap requires Accessibility permission (and, on recent macOS,
-//! Input Monitoring). Untested: this file is typechecked, never executed.
+//! Input Monitoring). Native callback tests construct events without posting
+//! them; live event-tap installation still requires an interactive permission grant.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -22,7 +23,7 @@ use core_graphics::event::{
 };
 
 use crate::config::Config;
-use crate::keys::{Chord, Modifiers};
+use crate::keys::{Chord, ConsumedKeys, Modifiers};
 
 static TAP_PORT: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
@@ -38,6 +39,7 @@ pub fn install(
     queue: Arc<Mutex<Vec<Chord>>>,
     config: Arc<Mutex<Config>>,
 ) -> Result<CGEventTap<'static>, ()> {
+    let consumed = Mutex::new(ConsumedKeys::default());
     let tap = CGEventTap::new(
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
@@ -48,7 +50,7 @@ pub fn install(
             CGEventType::FlagsChanged,
         ],
         move |_proxy: CGEventTapProxy, event_type, event: &CGEvent| {
-            on_event(event_type, event, &queue, &config)
+            on_event(event_type, event, &queue, &config, &consumed)
         },
     )?;
     let source = tap.mach_port().create_runloop_source(0).map_err(|_| ())?;
@@ -71,6 +73,7 @@ fn on_event(
     event: &CGEvent,
     queue: &Mutex<Vec<Chord>>,
     config: &Mutex<Config>,
+    consumed: &Mutex<ConsumedKeys>,
 ) -> CallbackResult {
     if matches!(
         event_type,
@@ -100,10 +103,17 @@ fn on_event(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         config.action_for(chord).map(crate::action::Action::repeats)
     };
-    let Some(repeats) = decision else {
+    let down = kind == CGEventType::KeyDown as u32;
+    let swallow = consumed.lock().unwrap_or_else(|p| p.into_inner()).filter(
+        keycode,
+        down,
+        decision.is_some(),
+    );
+    if !swallow {
         return CallbackResult::Keep;
-    };
-    if kind == CGEventType::KeyDown as u32 {
+    }
+    if down && decision.is_some() {
+        let repeats = decision.unwrap();
         let autorepeat = event
             .get_integer_value_field(core_graphics::event::EventField::KEYBOARD_EVENT_AUTOREPEAT)
             != 0;
@@ -114,8 +124,7 @@ fn on_event(
                 .push(chord);
         }
     }
-    // Swallow the matching key-up as well, so the focused app does not see a
-    // press without a release (or the reverse).
+    // Pair releases by physical key, even when modifiers change first.
     CallbackResult::Drop
 }
 
@@ -134,4 +143,85 @@ fn modifiers(flags: CGEventFlags) -> Modifiers {
         mods |= Modifiers::CMD;
     }
     mods
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_graphics::event::EventField;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    // Construct events locally; never post them or install a global event tap.
+    fn event(chord: Chord, down: bool) -> CGEvent {
+        let source = CGEventSource::new(CGEventSourceStateID::Private).unwrap();
+        let event = CGEvent::new_keyboard_event(source, chord.keycode, down).unwrap();
+        let mut flags = CGEventFlags::empty();
+        for (modifier, flag) in [
+            (Modifiers::CTRL, CGEventFlags::CGEventFlagControl),
+            (Modifiers::ALT, CGEventFlags::CGEventFlagAlternate),
+            (Modifiers::CMD, CGEventFlags::CGEventFlagCommand),
+            (Modifiers::SHIFT, CGEventFlags::CGEventFlagShift),
+        ] {
+            if chord.mods.contains(modifier) {
+                flags |= flag;
+            }
+        }
+        event.set_flags(flags);
+        event
+    }
+
+    #[test]
+    fn every_default_dispatches_from_native_keyboard_events() {
+        let builtin = Config::builtin();
+        let config = Mutex::new(builtin.clone());
+        let queue = Mutex::new(Vec::new());
+        let consumed = Mutex::new(ConsumedKeys::default());
+        for binding in builtin.bindings {
+            let down = event(binding.chord, true);
+            assert!(matches!(
+                on_event(CGEventType::KeyDown, &down, &queue, &config, &consumed),
+                CallbackResult::Drop
+            ));
+            assert_eq!(*queue.lock().unwrap(), vec![binding.chord]);
+            queue.lock().unwrap().clear();
+            down.set_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT, 1);
+            on_event(CGEventType::KeyDown, &down, &queue, &config, &consumed);
+            assert_eq!(
+                queue.lock().unwrap().len(),
+                usize::from(binding.action.repeats())
+            );
+            queue.lock().unwrap().clear();
+            let up = event(
+                Chord {
+                    mods: Modifiers::NONE,
+                    ..binding.chord
+                },
+                false,
+            );
+            assert!(matches!(
+                on_event(CGEventType::KeyUp, &up, &queue, &config, &consumed),
+                CallbackResult::Drop
+            ));
+            assert!(queue.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn standard_command_shortcuts_pass_through_native_callback() {
+        let config = Mutex::new(Config::builtin());
+        let queue = Mutex::new(Vec::new());
+        let consumed = Mutex::new(ConsumedKeys::default());
+        for key in [
+            "Q", "W", "F", "T", "S", "TAB", "GRAVE", "SPACE", "1", "C", "V",
+        ] {
+            let chord = crate::keys::parse_chord(&format!("CMD + {key}"), Modifiers::NONE).unwrap();
+            for (down, kind) in [(true, CGEventType::KeyDown), (false, CGEventType::KeyUp)] {
+                assert!(matches!(
+                    on_event(kind, &event(chord, down), &queue, &config, &consumed),
+                    CallbackResult::Keep
+                ));
+            }
+        }
+        assert!(queue.lock().unwrap().is_empty());
+    }
 }

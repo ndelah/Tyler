@@ -969,12 +969,12 @@ mod tests {
         let mut wm = wm();
         assert_eq!(
             wm.handle(&Action::Launch("terminal".into())),
-            vec![Command::LaunchApp("Ghostty".into())]
+            vec![Command::LaunchApp("Terminal".into())]
         );
         assert_eq!(
             wm.handle(&Action::WebApp("https://x.com/".into())),
             vec![Command::OpenWebApp {
-                browser: "Google Chrome".into(),
+                browser: "Safari".into(),
                 url: "https://x.com/".into()
             }]
         );

@@ -67,3 +67,7 @@ case ":${PATH}:" in
     echo "  echo 'export PATH=\"${dest}:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
     ;;
 esac
+
+echo "Tutorial: https://github.com/ndelah/Tyler/blob/main/docs/tutorial.md"
+echo "SUPER is Control+Option+Command. Existing config files are preserved; see the tutorial to migrate."
+echo "For Accessibility, authorize your terminal app if tyler-tiler is not listed."

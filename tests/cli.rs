@@ -19,7 +19,7 @@ fn check_config_accepts_builtin_defaults() {
 }
 
 #[test]
-fn bindings_include_omarchy_terminal_chord() {
+fn bindings_include_macos_terminal_chord() {
     let output = bin().arg("bindings").output().unwrap();
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();

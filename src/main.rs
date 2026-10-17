@@ -31,7 +31,7 @@ fn main() -> ExitCode {
 fn print_help() {
     println!(
         "\
-tyler-tiler — automatic tiling for macOS, with Omarchy's Hyprland bindings
+tyler-tiler — automatic tiling for macOS, with macOS-friendly tiling shortcuts
 
 Usage:
   tyler-tiler                     run the window manager (macOS)
@@ -41,7 +41,7 @@ Usage:
 
 Config: $TYLER_CONFIG, else $XDG_CONFIG_HOME/tyler/tyler.toml,
         else ~/.config/tyler/tyler.toml
-A user file is layered on top of the built-in Omarchy defaults."
+A user file is layered on top of the built-in macOS defaults."
     );
 }
 

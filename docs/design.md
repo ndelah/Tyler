@@ -1,3 +1,9 @@
+> Historical design notes from the original Omarchy port. The binding map,
+> defaults, environment, and validation counts below describe that initial tree.
+> Current macOS defaults and operational instructions are in the
+> [tutorial](tutorial.md) and [default configuration](../config/default.toml).
+> The old mapping is opt-in via [omarchy.toml](../config/omarchy.toml).
+
 # tyler-tiler — design and roadmap
 
 A small, fast automatic tiling window manager for macOS that behaves like

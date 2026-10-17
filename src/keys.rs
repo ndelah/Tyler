@@ -340,3 +340,43 @@ mod tests {
         assert_eq!(parse_chord(&c.to_string(), Modifiers::NONE).unwrap(), c);
     }
 }
+
+/// Tracks consumed physical keys so releasing modifiers before the key does
+/// not leak an orphan key-up to the foreground application.
+#[derive(Default)]
+pub struct ConsumedKeys(std::collections::HashSet<u16>);
+
+impl ConsumedKeys {
+    pub fn filter(&mut self, keycode: u16, down: bool, bound: bool) -> bool {
+        if down {
+            if bound {
+                self.0.insert(keycode);
+            }
+            self.0.contains(&keycode)
+        } else {
+            self.0.remove(&keycode)
+        }
+    }
+}
+
+#[cfg(test)]
+mod consumed_tests {
+    use super::*;
+
+    #[test]
+    fn release_is_consumed_after_modifiers_or_config_change() {
+        let mut keys = ConsumedKeys::default();
+        assert!(keys.filter(12, true, true));
+        assert!(keys.filter(12, true, false)); // repeat after modifier release
+        assert!(keys.filter(12, false, false));
+        assert!(!keys.filter(12, true, false)); // next ordinary press passes
+        assert!(!keys.filter(12, false, false));
+    }
+
+    #[test]
+    fn unmatched_release_passes_even_if_modifiers_now_match() {
+        let mut keys = ConsumedKeys::default();
+        assert!(!keys.filter(13, true, false));
+        assert!(!keys.filter(13, false, true));
+    }
+}

@@ -1,0 +1,144 @@
+# Legacy opt-in preset: intercepts standard macOS shortcuts.
+# tyler-tiler default configuration.
+#
+# Mirrors Omarchy's Hyprland defaults (basecamp/omarchy):
+#   default/hypr/bindings/tiling.lua, default/hypr/bindings/applications.lua,
+#   default/hypr/looknfeel.lua
+#
+# Your ~/.config/tyler/tyler.toml is layered on top of this file: set any key
+# to override it, bind a chord to "unbind" to remove a default, or set
+# `default_bindings = false` to start from an empty binding table.
+
+[general]
+# Physical modifier(s) that SUPER means on macOS. "cmd" sits where Super does
+# on a Mac keyboard and is the only modifier Omarchy never combines with SUPER,
+# so every Omarchy chord stays distinct. Any combo works, e.g. "ctrl+alt".
+super = "cmd"
+gaps_in = 5
+gaps_out = 10
+# Reserved: macOS has no compositor hook for borders (see plan, milestone 4).
+border_size = 2
+layout = "dwindle"
+default_bindings = true
+
+[dwindle]
+preserve_split = true
+# 2 = new window always goes right/bottom (Omarchy default).
+force_split = 2
+split_ratio = 0.5
+
+[apps]
+# Omarchy role -> macOS application name (as used by `open -a`).
+terminal = "Ghostty"
+browser = "Google Chrome"
+file_manager = "Finder"
+music = "Spotify"
+messenger = "Signal"
+notes = "Obsidian"
+passwords = "1Password"
+
+[rules]
+# Apps whose windows start floating (dialog-like or fixed-size apps).
+float = ["System Settings", "System Information", "Calculator", "Archive Utility", "1Password"]
+
+[bindings]
+# --- Applications (applications.lua) ---
+"SUPER + RETURN" = "launch terminal"
+"SUPER + SHIFT + RETURN" = "launch browser"
+"SUPER + SHIFT + F" = "launch file_manager"
+"SUPER + SHIFT + B" = "launch browser"
+"SUPER + SHIFT + ALT + B" = "exec open -na 'Google Chrome' --args --incognito"
+"SUPER + SHIFT + N" = "exec open -na Ghostty --args -e nvim"
+"SUPER + ALT + RETURN" = "exec open -na Ghostty --args -e tmux new-session -A -s Work"
+"SUPER + SHIFT + M" = "launch music"
+"SUPER + SHIFT + G" = "launch messenger"
+"SUPER + SHIFT + O" = "launch notes"
+"SUPER + SHIFT + SLASH" = "launch passwords"
+"SUPER + SHIFT + A" = "webapp https://chatgpt.com"
+"SUPER + SHIFT + ALT + A" = "webapp https://grok.com"
+"SUPER + SHIFT + C" = "webapp https://app.hey.com/calendar/weeks/"
+"SUPER + SHIFT + E" = "webapp https://app.hey.com"
+"SUPER + SHIFT + Y" = "webapp https://youtube.com/"
+"SUPER + SHIFT + ALT + G" = "webapp https://web.whatsapp.com/"
+"SUPER + SHIFT + P" = "webapp https://photos.google.com/"
+"SUPER + SHIFT + S" = "webapp https://maps.google.com/"
+"SUPER + SHIFT + X" = "webapp https://x.com/"
+
+# --- Window control (tiling.lua) ---
+"SUPER + W" = "killactive"
+"SUPER + Q" = "killactive"
+"SUPER + J" = "togglesplit"
+"SUPER + T" = "togglefloating"
+"SUPER + F" = "fullscreen"
+"SUPER + ALT + F" = "fullscreen maximized"
+
+# Focus
+"SUPER + LEFT" = "movefocus l"
+"SUPER + RIGHT" = "movefocus r"
+"SUPER + UP" = "movefocus u"
+"SUPER + DOWN" = "movefocus d"
+
+# Swap
+"SUPER + SHIFT + LEFT" = "swapwindow l"
+"SUPER + SHIFT + RIGHT" = "swapwindow r"
+"SUPER + SHIFT + UP" = "swapwindow u"
+"SUPER + SHIFT + DOWN" = "swapwindow d"
+
+# Workspaces: switch / move (follow) / move silently. code:10..19 = 1..0
+"SUPER + code:10" = "workspace 1"
+"SUPER + code:11" = "workspace 2"
+"SUPER + code:12" = "workspace 3"
+"SUPER + code:13" = "workspace 4"
+"SUPER + code:14" = "workspace 5"
+"SUPER + code:15" = "workspace 6"
+"SUPER + code:16" = "workspace 7"
+"SUPER + code:17" = "workspace 8"
+"SUPER + code:18" = "workspace 9"
+"SUPER + code:19" = "workspace 10"
+"SUPER + SHIFT + code:10" = "movetoworkspace 1"
+"SUPER + SHIFT + code:11" = "movetoworkspace 2"
+"SUPER + SHIFT + code:12" = "movetoworkspace 3"
+"SUPER + SHIFT + code:13" = "movetoworkspace 4"
+"SUPER + SHIFT + code:14" = "movetoworkspace 5"
+"SUPER + SHIFT + code:15" = "movetoworkspace 6"
+"SUPER + SHIFT + code:16" = "movetoworkspace 7"
+"SUPER + SHIFT + code:17" = "movetoworkspace 8"
+"SUPER + SHIFT + code:18" = "movetoworkspace 9"
+"SUPER + SHIFT + code:19" = "movetoworkspace 10"
+"SUPER + SHIFT + ALT + code:10" = "movetoworkspacesilent 1"
+"SUPER + SHIFT + ALT + code:11" = "movetoworkspacesilent 2"
+"SUPER + SHIFT + ALT + code:12" = "movetoworkspacesilent 3"
+"SUPER + SHIFT + ALT + code:13" = "movetoworkspacesilent 4"
+"SUPER + SHIFT + ALT + code:14" = "movetoworkspacesilent 5"
+"SUPER + SHIFT + ALT + code:15" = "movetoworkspacesilent 6"
+"SUPER + SHIFT + ALT + code:16" = "movetoworkspacesilent 7"
+"SUPER + SHIFT + ALT + code:17" = "movetoworkspacesilent 8"
+"SUPER + SHIFT + ALT + code:18" = "movetoworkspacesilent 9"
+"SUPER + SHIFT + ALT + code:19" = "movetoworkspacesilent 10"
+
+"ALT + TAB" = "cyclenext"
+"ALT + SHIFT + TAB" = "cyclenext prev"
+
+"SUPER + TAB" = "workspace e+1"
+"SUPER + SHIFT + TAB" = "workspace e-1"
+"SUPER + CTRL + TAB" = "workspace previous"
+
+# Scratchpad
+"SUPER + S" = "togglespecialworkspace scratchpad"
+"SUPER + ALT + S" = "movetoworkspacesilent special:scratchpad"
+"SUPER + GRAVE" = "togglespecialworkspace scratchpad"
+"SUPER + SHIFT + GRAVE" = "movetoworkspacesilent special:scratchpad"
+
+# Resize (code:20 = minus, code:21 = equal)
+"SUPER + code:20" = "resizeactive -100 0"
+"SUPER + code:21" = "resizeactive 100 0"
+"SUPER + SHIFT + code:20" = "resizeactive 0 -100"
+"SUPER + SHIFT + code:21" = "resizeactive 0 100"
+"SUPER + ALT + code:20" = "resizeactive -25 0"
+"SUPER + ALT + code:21" = "resizeactive 25 0"
+"SUPER + SHIFT + ALT + code:20" = "resizeactive 0 -25"
+"SUPER + SHIFT + ALT + code:21" = "resizeactive 0 25"
+"SUPER + CTRL + code:20" = "resizeactive -300 0"
+"SUPER + CTRL + code:21" = "resizeactive 300 0"
+"SUPER + CTRL + SHIFT + code:20" = "resizeactive 0 -300"
+"SUPER + CTRL + SHIFT + code:21" = "resizeactive 0 300"
