@@ -210,7 +210,7 @@ impl Navigator {
         scroll.setAutohidesScrollers(true);
         let control = NSSegmentedControl::new(mtm);
         control.setSegmentCount(self.rows.len() as isize);
-        control.setSegmentStyle(NSSegmentStyle::Automatic);
+        control.setSegmentStyle(NSSegmentStyle::Separated);
         control.setControlSize(NSControlSize::Small);
         control.setTrackingMode(NSSegmentSwitchTracking::SelectOne);
         control.setFont(Some(&NSFont::systemFontOfSize(12.0)));
@@ -303,7 +303,8 @@ fn segment_label(row: &Desktop) -> String {
     }
 }
 fn segment_width(label: &str) -> f64 {
-    (label.chars().count() as f64 * 7.0 + 24.0).clamp(36.0, 200.0)
+    // More horizontal inset keeps numbers, names, and symbols from feeling cramped.
+    (label.chars().count() as f64 * 7.0 + 36.0).clamp(48.0, 212.0)
 }
 
 /// Exercise actual AppKit controls offscreen without AX, yabai, or changing desktops.
