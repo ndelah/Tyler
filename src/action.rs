@@ -51,6 +51,10 @@ pub enum Action {
     CycleNext {
         forward: bool,
     },
+    FocusMonitor {
+        forward: bool,
+    },
+    ShowKeybindings,
     ToggleScratchpad,
     MoveToScratchpad,
     Reload,
@@ -91,7 +95,11 @@ impl Action {
     pub fn repeats(&self) -> bool {
         matches!(
             self,
-            Action::Focus(_) | Action::Swap(_) | Action::Resize { .. } | Action::CycleNext { .. }
+            Action::Focus(_)
+                | Action::Swap(_)
+                | Action::Resize { .. }
+                | Action::CycleNext { .. }
+                | Action::FocusMonitor { .. }
         )
     }
 
@@ -151,6 +159,14 @@ impl Action {
             "cyclenext" => Action::CycleNext {
                 forward: !matches!(arg, "prev" | "b"),
             },
+            "focusmonitor" => Action::FocusMonitor {
+                forward: match arg {
+                    "next" | "+1" => true,
+                    "prev" | "-1" => false,
+                    _ => return err("focusmonitor needs next or prev"),
+                },
+            },
+            "keybindings" => Action::ShowKeybindings,
             "reload" => Action::Reload,
             "exit" | "quit" => Action::Quit,
             "exec" | "launch" => return err(format!("`{cmd}` needs an argument")),
@@ -217,6 +233,8 @@ mod tests {
 
     #[test]
     fn rejects_invalid() {
+        assert!(Action::parse("focusmonitor").is_err());
+        assert!(Action::parse("focusmonitor sideways").is_err());
         assert!(Action::parse("workspace 11").is_err());
         assert!(Action::parse("workspace 0").is_err());
         assert!(Action::parse("movefocus x").is_err());

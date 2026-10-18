@@ -10,7 +10,10 @@ pub mod config;
 pub mod geometry;
 pub mod keys;
 pub mod layout;
+pub mod motion;
+pub mod navigator;
 pub mod platform;
+pub mod spaces;
 pub mod wm;
 
 /// Opaque window identifier. On macOS this is the `CGWindowID`.

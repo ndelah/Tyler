@@ -9,6 +9,7 @@
 
 use crate::geometry::{find_neighbor, Axis, Direction, Rect};
 use crate::WindowId;
+use std::collections::HashMap;
 
 pub const MIN_RATIO: f64 = 0.1;
 pub const MAX_RATIO: f64 = 0.9;
@@ -282,6 +283,204 @@ impl Tree {
         out
     }
 
+    /// Respect minimum sizes learned from AX readback. Preserve the split
+    /// unless changing its axis is necessary to fit both children.
+    pub fn constrain(
+        &mut self,
+        area: Rect,
+        gaps: Gaps,
+        minimums: &HashMap<WindowId, (f64, f64)>,
+    ) -> bool {
+        let Some(root) = self.root else { return true };
+        let mut candidate = self.clone();
+        let area = area.inset(gaps.outer);
+        if candidate.constrain_node(root, area, gaps.inner, minimums) {
+            *self = candidate;
+            return true;
+        }
+        // A nested subtree may need to rotate before its parent can fit.
+        // Search the smallest number of axis changes first, with a fixed
+        // budget so crowded workspaces cannot stall the event loop.
+        let splits: Vec<_> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(id, node)| {
+                matches!(node.as_ref().map(|n| &n.kind), Some(NodeKind::Split { .. })).then_some(id)
+            })
+            .take(12)
+            .collect();
+        let mut masks: Vec<usize> = (1..(1 << splits.len())).collect();
+        masks.sort_by_key(|mask| mask.count_ones());
+        for mask in masks {
+            let mut candidate = self.clone();
+            for (bit, id) in splits.iter().enumerate() {
+                if mask & (1 << bit) != 0 {
+                    if let NodeKind::Split { axis, .. } = &mut candidate.node_mut(*id).kind {
+                        *axis = axis.flipped();
+                    }
+                }
+            }
+            if candidate.constrain_node(root, area, gaps.inner, minimums) {
+                *self = candidate;
+                return true;
+            }
+        }
+        self.regroup_to_fit(area, gaps.inner, minimums)
+    }
+
+    /// macOS minimum sizes can make the existing dwindle topology impossible
+    /// even though all windows fit in another BSP arrangement. Regroup into
+    /// columns only after preserving that topology has failed.
+    fn regroup_to_fit(
+        &mut self,
+        area: Rect,
+        gap: f64,
+        minimums: &HashMap<WindowId, (f64, f64)>,
+    ) -> bool {
+        let mut windows = self.windows();
+        let size = |id: &WindowId| {
+            let (w, h) = minimums.get(id).copied().unwrap_or((100.0, 100.0));
+            (w + 2.0 * gap, h + 2.0 * gap)
+        };
+        windows.sort_by(|a, b| size(b).1.total_cmp(&size(a).1));
+        for count in 1..=windows.len() {
+            let mut columns: Vec<Vec<WindowId>> = vec![Vec::new(); count];
+            let mut heights = vec![0.0_f64; count];
+            let mut widths = vec![0.0_f64; count];
+            let mut fits = true;
+            for id in &windows {
+                let (w, h) = size(id);
+                let target = (0..count)
+                    .filter(|i| heights[*i] + h <= area.h + 0.5)
+                    .min_by(|a, b| heights[*a].total_cmp(&heights[*b]));
+                let Some(i) = target else {
+                    fits = false;
+                    break;
+                };
+                columns[i].push(*id);
+                heights[i] += h;
+                widths[i] = widths[i].max(w);
+            }
+            if !fits || widths.iter().sum::<f64>() > area.w + 0.5 {
+                continue;
+            }
+            let mut candidate = Tree::new();
+            let mut roots = Vec::new();
+            for column in columns.into_iter().filter(|c| !c.is_empty()) {
+                let leaves = column
+                    .into_iter()
+                    .map(|id| {
+                        candidate.alloc(Node {
+                            parent: None,
+                            kind: NodeKind::Leaf(id),
+                        })
+                    })
+                    .collect();
+                roots.push(candidate.join(leaves, Axis::Vertical));
+            }
+            candidate.root = Some(candidate.join(roots, Axis::Horizontal));
+            candidate.last_inserted = self.last_inserted;
+            if candidate.constrain_node(candidate.root.unwrap(), area, gap, minimums) {
+                *self = candidate;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn join(&mut self, mut nodes: Vec<NodeId>, axis: Axis) -> NodeId {
+        let count = nodes.len();
+        let first = nodes.remove(0);
+        if nodes.is_empty() {
+            return first;
+        }
+        let second = self.join(nodes, axis);
+        let parent = self.alloc(Node {
+            parent: None,
+            kind: NodeKind::Split {
+                axis,
+                ratio: 1.0 / count as f64,
+                children: [first, second],
+            },
+        });
+        self.node_mut(first).parent = Some(parent);
+        self.node_mut(second).parent = Some(parent);
+        parent
+    }
+
+    fn minimum(
+        &self,
+        id: NodeId,
+        gap: f64,
+        minimums: &HashMap<WindowId, (f64, f64)>,
+    ) -> (f64, f64) {
+        match self.node(id).kind {
+            NodeKind::Leaf(w) => {
+                let (w, h) = minimums.get(&w).copied().unwrap_or((100.0, 100.0));
+                (w + 2.0 * gap, h + 2.0 * gap)
+            }
+            NodeKind::Split { axis, children, .. } => {
+                let a = self.minimum(children[0], gap, minimums);
+                let b = self.minimum(children[1], gap, minimums);
+                match axis {
+                    Axis::Horizontal => (a.0 + b.0, a.1.max(b.1)),
+                    Axis::Vertical => (a.0.max(b.0), a.1 + b.1),
+                }
+            }
+        }
+    }
+
+    fn constrain_node(
+        &mut self,
+        id: NodeId,
+        area: Rect,
+        gap: f64,
+        minimums: &HashMap<WindowId, (f64, f64)>,
+    ) -> bool {
+        let NodeKind::Split {
+            axis,
+            ratio,
+            children,
+        } = self.node(id).kind
+        else {
+            let (w, h) = self.minimum(id, gap, minimums);
+            return w <= area.w + 0.5 && h <= area.h + 0.5;
+        };
+        let a = self.minimum(children[0], gap, minimums);
+        let b = self.minimum(children[1], gap, minimums);
+        for axis in [axis, axis.flipped()] {
+            let (extent, first, second, fits) = match axis {
+                Axis::Horizontal => (
+                    area.w,
+                    a.0,
+                    b.0,
+                    a.0 + b.0 <= area.w + 0.5 && a.1.max(b.1) <= area.h + 0.5,
+                ),
+                Axis::Vertical => (
+                    area.h,
+                    a.1,
+                    b.1,
+                    a.1 + b.1 <= area.h + 0.5 && a.0.max(b.0) <= area.w + 0.5,
+                ),
+            };
+            if !fits {
+                continue;
+            }
+            let lower = first / extent;
+            let ratio = ratio.clamp(lower, (1.0 - second / extent).max(lower));
+            self.node_mut(id).kind = NodeKind::Split {
+                axis,
+                ratio,
+                children,
+            };
+            let (first, second) = area.split(axis, ratio);
+            return self.constrain_node(children[0], first, gap, minimums)
+                && self.constrain_node(children[1], second, gap, minimums);
+        }
+        false
+    }
+
     /// Window adjacent to `window` in `dir`, based on the computed layout.
     pub fn neighbor(&self, window: WindowId, dir: Direction, area: Rect) -> Option<WindowId> {
         let frames = self.layout(area, Gaps::default());
@@ -426,6 +625,91 @@ mod tests {
         let mut t = Tree::new();
         insert(&mut t, 1, None);
         assert!(frame(&t, 1).approx_eq(&SCREEN));
+    }
+
+    #[test]
+    fn minimum_width_grows_tile_or_changes_split_instead_of_overflowing() {
+        let mut t = Tree::new();
+        insert(&mut t, 1, None);
+        insert(&mut t, 2, Some(1));
+        let mut minimums = HashMap::from([(2, (1000.0, 400.0))]);
+        assert!(t.constrain(SCREEN, NO_GAPS, &minimums));
+        assert_eq!(frame(&t, 2).w, 1000.0);
+        assert_eq!(frame(&t, 1).w, 600.0);
+        minimums.insert(1, (1000.0, 400.0));
+        assert!(t.constrain(SCREEN, NO_GAPS, &minimums));
+        assert_eq!(frame(&t, 1).w, SCREEN.w);
+        assert_eq!(frame(&t, 2).w, SCREEN.w);
+        assert_eq!(frame(&t, 1).max_y(), frame(&t, 2).y);
+        let before = t.layout(SCREEN, NO_GAPS);
+        minimums.insert(1, (2000.0, 1500.0));
+        assert!(!t.constrain(SCREEN, NO_GAPS, &minimums));
+        assert_eq!(before, t.layout(SCREEN, NO_GAPS));
+    }
+
+    #[test]
+    fn nested_minimums_can_rotate_subtrees_to_keep_apps_tiled() {
+        let mut t = Tree::new();
+        insert(&mut t, 1, None);
+        insert(&mut t, 2, Some(1));
+        insert(&mut t, 3, Some(2));
+        insert(&mut t, 4, Some(3));
+        let minimums = HashMap::from([
+            (1, (600.0, 600.0)),
+            (2, (500.0, 500.0)),
+            (3, (480.0, 600.0)),
+            (4, (484.0, 344.0)),
+        ]);
+        assert!(t.constrain(SCREEN, NO_GAPS, &minimums));
+        let frames = t.layout(SCREEN, NO_GAPS);
+        for (id, r) in &frames {
+            let min = minimums[id];
+            assert!(r.w >= min.0 - 0.5 && r.h >= min.1 - 0.5);
+            assert!(r.contained_in(SCREEN).approx_eq(r));
+            for (other, s) in &frames {
+                if id == other {
+                    continue;
+                }
+                let overlap = (r.max_x().min(s.max_x()) - r.x.max(s.x)).max(0.0)
+                    * (r.max_y().min(s.max_y()) - r.y.max(s.y)).max(0.0);
+                assert!(overlap < 0.5);
+            }
+        }
+    }
+
+    #[test]
+    fn real_mac_app_minimums_regroup_without_floating_or_overlap() {
+        let area = Rect::new(0.0, 30.0, 1792.0, 1090.0);
+        let gaps = Gaps {
+            inner: 5.0,
+            outer: 10.0,
+        };
+        let minimums = HashMap::from([
+            (1, (300.0, 200.0)),
+            (2, (500.0, 375.0)),
+            (3, (500.0, 520.0)),
+            (4, (484.0, 344.0)),
+            (5, (480.0, 600.0)),
+        ]);
+        let mut t = Tree::new();
+        for id in 1..=5 {
+            t.insert(id, None, area, ForceSplit::Second, 0.5);
+        }
+        assert!(t.constrain(area, gaps, &minimums));
+        let frames = t.layout(area, gaps);
+        for (id, r) in &frames {
+            let min = minimums[id];
+            assert!(r.w >= min.0 - 0.5 && r.h >= min.1 - 0.5, "{id}: {r:?}");
+            assert!(r.contained_in(area).approx_eq(r));
+            for (other, s) in &frames {
+                if id == other {
+                    continue;
+                }
+                let overlap = (r.max_x().min(s.max_x()) - r.x.max(s.x)).max(0.0)
+                    * (r.max_y().min(s.max_y()) - r.y.max(s.y)).max(0.0);
+                assert!(overlap < 0.5);
+            }
+        }
     }
 
     #[test]

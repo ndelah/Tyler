@@ -3,10 +3,12 @@
 //! `check-config`, `bindings` and `write-config` run on any host. With no
 //! arguments the window manager starts, which is macOS-only.
 
+mod settings;
+mod shortcuts;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use tyler_tiler::action::{Action, FullscreenMode, WorkspaceTarget};
 use tyler_tiler::config::{self, Config};
 
 fn main() -> ExitCode {
@@ -17,9 +19,57 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
+        Some("settings-json") => settings::run(resolve(args.next()), false),
+        Some("save-settings") => settings::run(resolve(args.next()), true),
         Some("check-config") => check_config(args.next()),
+        Some("check-motion") => {
+            #[cfg(target_os = "macos")]
+            match tyler_tiler::platform::macos::check_motion() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                eprintln!("The display clock requires macOS");
+                ExitCode::from(1)
+            }
+        }
+        Some("check-navigator") => {
+            #[cfg(target_os = "macos")]
+            match tyler_tiler::platform::macos::check_navigator(args.next().as_deref()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                eprintln!("Native controls require macOS");
+                ExitCode::from(1)
+            }
+        }
+        Some("check-spaces") => {
+            #[cfg(target_os = "macos")]
+            match tyler_tiler::platform::macos::check_spaces() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                eprintln!("Native Spaces require macOS");
+                ExitCode::from(1)
+            }
+        }
         Some("bindings") => print_bindings(args.next()),
-        Some("shortcuts") => print_shortcuts(args.next()),
+        Some("shortcuts") => print_shortcuts(args.next(), false),
+        Some("shortcuts-tsv") => print_shortcuts(args.next(), true),
         Some("write-config") => write_config(args.next()),
         Some(other) => {
             eprintln!("unknown command `{other}`\n");
@@ -37,9 +87,15 @@ tyler-tiler — automatic tiling for macOS, with macOS-friendly tiling shortcuts
 
 Usage:
   tyler-tiler                     run the window manager (macOS)
+  tyler-tiler check-spaces        check native Mission Control connection (macOS)
+  tyler-tiler check-navigator [PNG] check native controls offscreen; optional synthetic preview
+  tyler-tiler check-motion        probe the display clock without moving windows (macOS)
   tyler-tiler check-config [FILE] validate a config, or the built-in default
   tyler-tiler bindings [FILE]     print the resolved keybindings
   tyler-tiler shortcuts [FILE]    print readable shortcuts with physical modifiers
+  tyler-tiler shortcuts-tsv [FILE] print grouped shortcuts for the native guide
+  tyler-tiler settings-json [FILE] export editable settings as JSON
+  tyler-tiler save-settings [FILE] validate and save settings JSON from stdin
   tyler-tiler write-config [FILE] write the default config (refuses to overwrite)
 
 Config: $TYLER_CONFIG, else $XDG_CONFIG_HOME/tyler/tyler.toml,
@@ -48,7 +104,7 @@ A user file is layered on top of the built-in macOS defaults."
     );
 }
 
-fn print_shortcuts(path: Option<String>) -> ExitCode {
+fn print_shortcuts(path: Option<String>, structured: bool) -> ExitCode {
     let config = match load(&resolve(path)) {
         Ok(config) => config,
         Err(code) => return code,
@@ -56,56 +112,15 @@ fn print_shortcuts(path: Option<String>) -> ExitCode {
     let mut bindings = config.bindings.clone();
     bindings.sort_by_key(|b| b.chord.to_string());
     for binding in bindings {
-        let title = match &binding.action {
-            Action::Launch(app) => format!("Open {}", config.resolve_app(app)),
-            Action::Close => "Close focused window".into(),
-            Action::ToggleFloat => "Toggle floating / tiled".into(),
-            Action::ToggleSplit => "Flip split direction".into(),
-            Action::Fullscreen(FullscreenMode::Fullscreen) => "Fill display".into(),
-            Action::Fullscreen(FullscreenMode::Maximized) => "Maximize in usable area".into(),
-            Action::Focus(dir) | Action::Swap(dir) => {
-                use tyler_tiler::geometry::Direction;
-                let direction = match dir {
-                    Direction::Left => "left",
-                    Direction::Right => "right",
-                    Direction::Up => "above",
-                    Direction::Down => "below",
-                };
-                format!(
-                    "{} window {direction}",
-                    if matches!(binding.action, Action::Focus(_)) {
-                        "Focus"
-                    } else {
-                        "Swap with"
-                    }
-                )
-            }
-            Action::Workspace(WorkspaceTarget::Index(n)) => format!("Switch to workspace {n}"),
-            Action::Workspace(WorkspaceTarget::Previous) => "Return to last workspace".into(),
-            Action::Workspace(WorkspaceTarget::Relative(n)) => format!(
-                "{} occupied workspace",
-                if *n > 0 { "Next" } else { "Previous" }
-            ),
-            Action::MoveToWorkspace { workspace, follow } => format!(
-                "Move to workspace {workspace}{}",
-                if *follow {
-                    " and follow"
-                } else {
-                    " without following"
-                }
-            ),
-            Action::Resize { dx, dy } => format!("Resize: width {dx:+}, height {dy:+} points"),
-            Action::CycleNext { forward } => {
-                format!("{} window", if *forward { "Next" } else { "Previous" })
-            }
-            Action::ToggleScratchpad => "Show / hide scratchpad".into(),
-            Action::MoveToScratchpad => "Send window to scratchpad".into(),
-            Action::Reload => "Reload configuration".into(),
-            Action::Quit => "Quit Tyler and restore windows".into(),
-            Action::Exec(cmd) => format!("Run {cmd}"),
-            Action::WebApp(url) => format!("Open {url}"),
-        };
-        println!("{:<30} {title}", binding.chord.to_string());
+        let title = shortcuts::title(&binding.action, &config);
+        if structured {
+            let group = shortcuts::group(&binding.action);
+            // Keep every binding on one record, including custom shell commands.
+            let title = title.replace(['\t', '\n', '\r'], " ");
+            println!("{group}\t{}\t{title}", binding.chord);
+        } else {
+            println!("{:<30} {title}", binding.chord.to_string());
+        }
     }
     ExitCode::SUCCESS
 }
@@ -150,7 +165,7 @@ fn print_bindings(path: Option<String>) -> ExitCode {
             let mut bindings = config.bindings;
             bindings.sort_by(|a, b| a.spec.cmp(&b.spec));
             for binding in bindings {
-                println!("{:<44} {}", binding.spec, format!("{:?}", binding.action));
+                println!("{:<44} {:?}", binding.spec, binding.action);
             }
             ExitCode::SUCCESS
         }

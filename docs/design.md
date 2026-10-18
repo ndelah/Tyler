@@ -1,3 +1,76 @@
+# Desktop navigator and independent modules (current)
+
+The Rust worker owns a native AppKit nonactivating panel containing a segmented
+control and horizontal scroll view. It runs AppKit's event loop, sharing the existing
+CFRunLoop sources, keyboard tap, configuration watcher, and native desktop snapshot.
+The panel occupies a 36-point strip below the macOS menu bar on the main display;
+screen safe-area geometry keeps it outside the camera housing. The current desktop
+stays selected and visible; fullscreen Spaces hide the strip. Standard system fonts,
+materials, selection, and image rendering follow macOS appearance.
+
+`src/navigator.rs` derives numbers and shortcut hints from the same filtered Space
+order and resolved bindings used by Tyler. Labels in `[navigator.labels]` use native
+Space IDs, preserving identities on reorder and app restart, but not when macOS
+recreates IDs. The strip does not rename Mission Control desktops. Icons may be
+emoji or `sf:` symbol names. Settings persists these through the existing validated,
+atomic Rust configuration bridge; SwiftUI is retained for the existing Settings shell.
+No SketchyBar source or runtime is used.
+
+`general.tiling_enabled` and `navigator.enabled` are independent. Disabling tiling
+cancels frame writes, restores explicit scratchpads, clears tracked layout state,
+and releases tiling shortcuts. Desktop shortcuts use native focus requests directly
+in navigator-only mode. Disabling the navigator removes the strip and releases its
+reserved space in Tyler's layout. Both disabled leave an idle Settings host. The
+existing yabai IPC backend remains responsible for querying and switching desktops.
+
+Validation includes stable identity/numbering tests, independent shortcut capture,
+settings round trips, and `check-navigator [PNG]`, an offscreen native-control test
+using synthetic desktops. A preview does not establish live desktop switching,
+notched-hardware behavior, or VoiceOver interaction.
+
+# Native Mission Control integration (current)
+
+Tyler now retains one layout per native Space ID, discovered through yabai's
+local Unix socket. Desktop shortcuts emit native focus/move requests. The core
+commits active desktop and window membership only from subsequent OS snapshots;
+failed operations never pretend a window moved. Mission Control reordering
+changes shortcut numbers without exchanging layouts. Trackpad/native desktop
+switches reconcile through the same snapshots.
+
+The backend uses public NSWorkspace notifications for desktop/app changes and
+AXObserver notifications for window lifecycle, focus and geometry. A coalescing
+CFRunLoop source drains shortcuts immediately after the event-tap callback
+returns. A one-second reconciliation remains for apps that omit notifications;
+pending native commands are confirmed on the 50 ms maintenance timer. Queries
+use IPC directly, without spawning shell processes. Other displays,
+fullscreen Spaces and windows assigned to multiple desktops are excluded.
+Only the current normal desktop receives frame/focus commands. Native desktop
+visibility never produces minimize/restore commands. The explicit, desktop-local
+scratchpad still uses minimization and is restored on normal quit.
+
+Yabai runs separately with `layout float`; Tyler owns tiling and input shortcuts.
+The connection is required, with a bounded IPC timeout and explicit startup /
+runtime failure reporting. SIP remains enabled; this integration does not load
+yabai's optional scripting addition. `scripts/setup-native-spaces.sh` preserves
+existing configuration; `check-spaces` diagnoses connectivity and layout conflicts.
+
+Layout commands are coalesced per window before AX writes. Rejected sizes are
+learned together after two stable observations, rather than repeatedly forcing
+an impossible tile. Transport failures are retried separately and never become
+minimum-size constraints. Frame writes pause briefly after an observed desktop
+change; this is a notification/settling heuristic, not a public signal that a
+Mission Control animation has finished.
+
+The optional animation prototype samples cubic ease-out curves from a CoreVideo
+display clock. Its callback only wakes the main loop; AX runs on the main thread.
+Intermediate samples write only changed geometry, with final readback and
+constraint validation. New targets replace old ones, desktop changes cancel
+them, Reduce Motion disables them, and slow AX batches trigger immediate tiling.
+This does not turn Tyler into a compositor or guarantee refresh-rate presentation.
+See [motion validation](motion.md) for the opt-in configuration and limits.
+
+The remainder of this file is historical and describes the former implementation.
+
 > Historical design notes from the original Omarchy port. The binding map,
 > defaults, environment, and validation counts below describe that initial tree.
 > Current macOS defaults and operational instructions are in the

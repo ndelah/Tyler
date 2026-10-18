@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::action::Action;
 use crate::keys::{parse_chord, Chord, Modifiers};
@@ -25,6 +25,7 @@ pub struct General {
     pub gaps_in: f64,
     pub gaps_out: f64,
     pub border_size: f64,
+    pub border_color: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +33,36 @@ pub struct Dwindle {
     pub preserve_split: bool,
     pub force_split: ForceSplit,
     pub split_ratio: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Animations {
+    /// Experimental AX animation, independent of native Space transitions.
+    pub enabled: bool,
+    pub duration_ms: u64,
+}
+
+/// Independent feature switches and desktop identities, keyed by native Space ID.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Navigator {
+    pub enabled: bool,
+    pub labels: BTreeMap<String, DesktopLabel>,
+}
+impl Default for Navigator {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            labels: BTreeMap::new(),
+        }
+    }
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DesktopLabel {
+    pub name: String,
+    /// Emoji or an SF Symbol name prefixed with `sf:`.
+    pub icon: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,8 +75,11 @@ pub struct Binding {
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub tiling_enabled: bool,
+    pub navigator: Navigator,
     pub general: General,
     pub dwindle: Dwindle,
+    pub animations: Animations,
     pub apps: BTreeMap<String, String>,
     pub float_apps: Vec<String>,
     pub bindings: Vec<Binding>,
@@ -58,6 +92,16 @@ impl Config {
             inner: self.general.gaps_in,
             outer: self.general.gaps_out,
         }
+    }
+
+    /// Disabled modules release their shortcuts back to the foreground app.
+    pub fn permits(&self, action: &Action) -> bool {
+        self.tiling_enabled
+            || matches!(
+                action,
+                Action::Quit | Action::Reload | Action::ShowKeybindings
+            )
+            || (self.navigator.enabled && matches!(action, Action::Workspace(_)))
     }
 
     pub fn action_for(&self, chord: Chord) -> Option<&Action> {
@@ -115,11 +159,31 @@ impl Config {
                 Modifiers::CMD
             });
         let pick = |u: Option<f64>, b: Option<f64>, d: f64| u.or(b).unwrap_or(d).max(0.0);
+        let border_size = user
+            .general
+            .border_size
+            .or(base.general.border_size)
+            .unwrap_or(4.0);
+        if !border_size.is_finite() || !(0.0..=20.0).contains(&border_size) {
+            errors.push("general.border_size must be within 0..=20 points".into());
+        }
+        let border_color = user
+            .general
+            .border_color
+            .or(base.general.border_color)
+            .unwrap_or_else(|| "#586B4A".into());
+        if border_color.len() != 7
+            || !border_color.starts_with('#')
+            || !border_color.bytes().skip(1).all(|b| b.is_ascii_hexdigit())
+        {
+            errors.push("general.border_color must be a hex color like #586B4A".into());
+        }
         let general = General {
             super_mods,
             gaps_in: pick(user.general.gaps_in, base.general.gaps_in, 5.0),
             gaps_out: pick(user.general.gaps_out, base.general.gaps_out, 10.0),
-            border_size: pick(user.general.border_size, base.general.border_size, 2.0),
+            border_size,
+            border_color,
         };
         if let Some(layout) = user
             .general
@@ -160,6 +224,22 @@ impl Config {
         };
 
         let mut apps = base.apps;
+        let duration_ms = user
+            .animations
+            .duration_ms
+            .or(base.animations.duration_ms)
+            .unwrap_or(160);
+        if !(80..=400).contains(&duration_ms) {
+            errors.push("animations.duration_ms must be within 80..=400".into());
+        }
+        let animations = Animations {
+            enabled: user
+                .animations
+                .enabled
+                .or(base.animations.enabled)
+                .unwrap_or(false),
+            duration_ms,
+        };
         apps.extend(user.apps);
         let float_apps = user.rules.float.or(base.rules.float).unwrap_or_default();
 
@@ -228,10 +308,28 @@ impl Config {
             .map(|(i, b)| (b.chord, i))
             .collect();
 
+        let navigator = user.navigator.or(base.navigator).unwrap_or_default();
+        for (id, label) in &navigator.labels {
+            if id.parse::<u64>().is_err()
+                || label.name.chars().count() > 48
+                || label.icon.chars().count() > 64
+                || label.name.chars().any(char::is_control)
+                || label.icon.chars().any(char::is_control)
+            {
+                errors.push("navigator.labels requires native Space IDs, names up to 48 characters, and icons up to 64 characters without control characters".into());
+            }
+        }
         if errors.is_empty() {
             Ok(Config {
+                tiling_enabled: user
+                    .general
+                    .tiling_enabled
+                    .or(base.general.tiling_enabled)
+                    .unwrap_or(true),
+                navigator,
                 general,
                 dwindle,
+                animations,
                 apps,
                 float_apps,
                 bindings,
@@ -275,10 +373,13 @@ impl std::error::Error for ConfigError {}
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
+    navigator: Option<Navigator>,
     #[serde(default)]
     general: RawGeneral,
     #[serde(default)]
     dwindle: RawDwindle,
+    #[serde(default)]
+    animations: RawAnimations,
     #[serde(default)]
     apps: BTreeMap<String, String>,
     #[serde(default)]
@@ -290,11 +391,13 @@ struct RawConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawGeneral {
+    tiling_enabled: Option<bool>,
     #[serde(rename = "super")]
     super_: Option<String>,
     gaps_in: Option<f64>,
     gaps_out: Option<f64>,
     border_size: Option<f64>,
+    border_color: Option<String>,
     layout: Option<String>,
     default_bindings: Option<bool>,
 }
@@ -305,6 +408,13 @@ struct RawDwindle {
     preserve_split: Option<bool>,
     force_split: Option<u8>,
     split_ratio: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawAnimations {
+    enabled: Option<bool>,
+    duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -369,6 +479,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animation_prototype_is_opt_in_and_validates_its_duration() {
+        assert!(!Config::builtin().animations.enabled);
+        let config = Config::from_layers(
+            DEFAULT_CONFIG,
+            Some("[animations]\nenabled = true\nduration_ms = 180"),
+        )
+        .unwrap();
+        assert!(config.animations.enabled);
+        assert_eq!(config.animations.duration_ms, 180);
+        for value in ["0", "401", "-1", "nan"] {
+            assert!(Config::from_layers(
+                DEFAULT_CONFIG,
+                Some(&format!("[animations]\nduration_ms = {value}"))
+            )
+            .is_err());
+        }
+    }
     use crate::action::WorkspaceTarget;
     use crate::geometry::Direction;
     use crate::keys::keycode_for;
@@ -382,7 +511,8 @@ mod tests {
         let c = Config::builtin();
         assert_eq!(c.general.gaps_in, 5.0);
         assert_eq!(c.general.gaps_out, 10.0);
-        assert_eq!(c.general.border_size, 2.0);
+        assert_eq!(c.general.border_size, 4.0);
+        assert_eq!(c.general.border_color, "#586B4A");
         assert!(c.dwindle.preserve_split);
         assert_eq!(c.dwindle.force_split, ForceSplit::Second);
         assert_eq!(c.general.super_mods, Modifiers::FN);
@@ -392,7 +522,7 @@ mod tests {
     fn builtin_has_macos_core_bindings() {
         let c = Config::builtin();
         let s = c.general.super_mods;
-        assert_eq!(c.action_for(chord("SUPER + X", s)), Some(&Action::Close));
+        assert_eq!(c.action_for(chord("SUPER + X", s)), None);
         assert_eq!(
             c.action_for(chord("SUPER + T", s)),
             Some(&Action::ToggleFloat)
@@ -427,20 +557,50 @@ mod tests {
                 })
             );
         }
-        assert_eq!(
-            c.action_for(chord("SUPER + MINUS", s)),
-            Some(&Action::Resize {
-                dx: -100.0,
-                dy: 0.0
-            })
-        );
+        for key in ["COMMA", "PERIOD"] {
+            for modifiers in ["SUPER", "SUPER + SHIFT"] {
+                assert_eq!(
+                    c.action_for(chord(&format!("{modifiers} + {key}"), s)),
+                    None
+                );
+            }
+        }
         assert_eq!(c.resolve_app("terminal"), "Terminal");
         assert_eq!(c.resolve_app("Safari"), "Safari");
     }
 
     #[test]
+    fn resize_defaults_select_axis_sign_and_three_step_sizes() {
+        let config = Config::builtin();
+        for (step_modifier, step) in [("", 100.0), ("ALT + ", 25.0), ("CTRL + ", 300.0)] {
+            for (key, sign) in [("MINUS", -1.0), ("EQUAL", 1.0)] {
+                for (axis_modifier, dx, dy) in
+                    [("", sign * step, 0.0), ("SHIFT + ", 0.0, sign * step)]
+                {
+                    let spec = format!("SUPER + {axis_modifier}{step_modifier}{key}");
+                    let action = config
+                        .action_for(chord(&spec, config.general.super_mods))
+                        .unwrap();
+                    assert_eq!(action, &Action::Resize { dx, dy }, "{spec}");
+                    assert!(action.repeats(), "{spec}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn defaults_preserve_common_macos_shortcuts() {
         let c = Config::builtin();
+        assert_eq!(
+            c.action_for(chord("FN + F", Modifiers::NONE)),
+            Some(&Action::Launch("file_manager".into()))
+        );
+        assert_eq!(
+            c.action_for(chord("FN + SHIFT + F", Modifiers::NONE)),
+            Some(&Action::Fullscreen(
+                crate::action::FullscreenMode::Fullscreen
+            ))
+        );
         for spec in [
             "CMD + Q",
             "CMD + W",
@@ -477,10 +637,11 @@ mod tests {
             "CTRL + CMD + Q",
             "ALT + TAB",
             "FN + A",
-            "FN + C",
             "FN + D",
             "FN + E",
-            "FN + F",
+            "FN + G",
+            "FN + U",
+            "FN + X",
             "FN + H",
             "FN + M",
             "FN + N",
@@ -517,7 +678,7 @@ mod tests {
             [apps]
             terminal = "Alacritty"
             [bindings]
-            "SUPER+X" = "unbind"
+            "SUPER+B" = "unbind"
             "SUPER + Q" = "exec say hello"
             "SUPER + H" = "movefocus l"
         "#;
@@ -526,7 +687,7 @@ mod tests {
         assert_eq!(c.general.gaps_in, 0.0);
         assert_eq!(c.general.gaps_out, 10.0);
         assert_eq!(c.resolve_app("terminal"), "Alacritty");
-        assert_eq!(c.action_for(chord("SUPER + X", s)), None);
+        assert_eq!(c.action_for(chord("SUPER + B", s)), None);
         assert_eq!(
             c.action_for(chord("SUPER + Q", s)),
             Some(&Action::Exec("say hello".into()))

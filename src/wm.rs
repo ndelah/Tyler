@@ -2,14 +2,12 @@
 //!
 //! [`Wm`] owns workspaces, per-workspace dwindle trees, floating state and
 //! focus. It consumes window events and [`Action`]s and returns [`Command`]s
-//! that a platform backend (macOS Accessibility API) executes. Virtual
-//! workspaces are implemented AeroSpace-style: windows on inactive workspaces
-//! are moved to the bottom-right corner of the display instead of using the
-//! private Spaces API.
+//! that a platform backend (macOS Accessibility API) executes. Inactive
+//! desktops are owned by macOS. Only the explicit scratchpad uses minimization.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::action::{Action, FullscreenMode, WorkspaceTarget, WORKSPACE_COUNT};
+use crate::action::{Action, FullscreenMode, WorkspaceTarget};
 use crate::config::Config;
 use crate::geometry::{find_neighbor, Direction, Rect};
 use crate::layout::Tree;
@@ -19,6 +17,14 @@ use crate::WindowId;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     SetFrame(WindowId, Rect),
+    /// Visibility is used only for the explicit scratchpad.
+    SetVisible(WindowId, bool),
+    FocusSpace(u64),
+    MoveToSpace {
+        window: WindowId,
+        space: u64,
+        follow: bool,
+    },
     /// Raise the window and activate its application.
     Focus(WindowId),
     Close(WindowId),
@@ -29,6 +35,10 @@ pub enum Command {
         url: String,
     },
     Exec(String),
+    FocusMonitor {
+        forward: bool,
+    },
+    ShowKeybindings,
     ReloadConfig,
     Quit,
 }
@@ -75,11 +85,16 @@ impl Workspace {
 
 pub struct Wm {
     config: Config,
-    /// Full display bounds (true fullscreen, hide corner).
+    /// Full display bounds (true fullscreen).
     display: Rect,
     /// Usable area excluding menu bar and Dock.
     visible: Rect,
     workspaces: Vec<Workspace>,
+    space_ids: Vec<u64>,
+    native_order: Vec<usize>,
+    native_occupied: HashSet<usize>,
+    suspended: bool,
+    scratchpad_home: HashMap<WindowId, usize>,
     scratchpad: Vec<WindowId>,
     scratchpad_visible: bool,
     active: usize,
@@ -87,6 +102,8 @@ pub struct Wm {
     windows: HashMap<WindowId, Managed>,
     focused: Option<WindowId>,
     applied: HashMap<WindowId, Rect>,
+    hidden: HashSet<WindowId>,
+    minimums: HashMap<WindowId, (f64, f64)>,
 }
 
 impl Wm {
@@ -95,7 +112,12 @@ impl Wm {
             config,
             display,
             visible,
-            workspaces: vec![Workspace::default(); WORKSPACE_COUNT],
+            workspaces: vec![Workspace::default()],
+            space_ids: vec![0],
+            native_order: Vec::new(),
+            native_occupied: HashSet::new(),
+            suspended: true,
+            scratchpad_home: HashMap::new(),
             scratchpad: Vec::new(),
             scratchpad_visible: false,
             active: 0,
@@ -103,6 +125,8 @@ impl Wm {
             windows: HashMap::new(),
             focused: None,
             applied: HashMap::new(),
+            hidden: HashSet::new(),
+            minimums: HashMap::new(),
         }
     }
 
@@ -114,7 +138,13 @@ impl Wm {
 
     /// 1-based active workspace number.
     pub fn active_workspace(&self) -> usize {
-        self.active + 1
+        if self.suspended {
+            return 0;
+        }
+        self.native_order
+            .iter()
+            .position(|&slot| slot == self.active)
+            .map_or(0, |i| i + 1)
     }
 
     pub fn focused(&self) -> Option<WindowId> {
@@ -132,7 +162,11 @@ impl Wm {
     /// 1-based workspace of a window (`None` for unmanaged/scratchpad).
     pub fn workspace_of(&self, id: WindowId) -> Option<usize> {
         match self.windows.get(&id)?.location {
-            Location::Workspace(i) => Some(i + 1),
+            Location::Workspace(i) => self
+                .native_order
+                .iter()
+                .position(|&slot| slot == i)
+                .map(|n| n + 1),
             Location::Scratchpad => None,
         }
     }
@@ -143,9 +177,13 @@ impl Wm {
 
     /// Workspaces (1-based) that currently hold windows.
     pub fn occupied_workspaces(&self) -> Vec<usize> {
-        (0..WORKSPACE_COUNT)
-            .filter(|&i| !self.workspaces[i].windows().is_empty())
-            .map(|i| i + 1)
+        self.native_order
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| {
+                self.native_occupied.contains(slot) || !self.workspaces[**slot].windows().is_empty()
+            })
+            .map(|(i, _)| i + 1)
             .collect()
     }
 
@@ -154,21 +192,93 @@ impl Wm {
         self.applied.get(&id).copied()
     }
 
-    /// Hidden windows park here: top-left at the display's bottom-right
-    /// corner, one point inside so macOS does not reject the move.
-    pub fn hidden_origin(&self) -> (f64, f64) {
-        (self.display.max_x() - 1.0, self.display.max_y() - 1.0)
+    pub fn is_visible(&self, id: WindowId) -> bool {
+        !self.suspended
+            && self.windows.get(&id).is_some_and(|m| match m.location {
+                Location::Workspace(i) => i == self.active,
+                Location::Scratchpad => {
+                    self.scratchpad_visible && self.scratchpad_home.get(&id) == Some(&self.active)
+                }
+            })
     }
 
-    pub fn is_hidden_frame(&self, rect: &Rect) -> bool {
-        let (hx, hy) = self.hidden_origin();
-        (rect.x - hx).abs() < 1.0 && (rect.y - hy).abs() < 1.0
+    /// Reconcile observed native membership without requesting a desktop switch.
+    /// Slots retain layouts by stable Space ID when Mission Control reorders desktops.
+    pub fn sync_native_desktops(
+        &mut self,
+        desktops: &[(u64, Vec<WindowId>)],
+        active: Option<u64>,
+    ) -> Vec<Command> {
+        self.native_order.clear();
+        self.native_occupied.clear();
+        for (id, members) in desktops {
+            let slot = match self.space_ids.iter().position(|known| known == id) {
+                Some(slot) => slot,
+                None => {
+                    self.space_ids.push(*id);
+                    self.workspaces.push(Workspace::default());
+                    self.workspaces.len() - 1
+                }
+            };
+            self.native_order.push(slot);
+            if !members.is_empty() {
+                self.native_occupied.insert(slot);
+            }
+        }
+        for (id, members) in desktops {
+            let slot = self.space_ids.iter().position(|known| known == id).unwrap();
+            for window in members {
+                if let Some(Location::Workspace(old)) = self.windows.get(window).map(|m| m.location)
+                {
+                    if old != slot {
+                        self.detach(*window, old);
+                        self.attach(*window, slot);
+                        self.workspaces[slot].focused = Some(*window);
+                        self.applied.remove(window);
+                    }
+                }
+            }
+        }
+        let slot = active
+            .and_then(|id| self.space_ids.iter().position(|known| *known == id))
+            .filter(|slot| self.native_order.contains(slot));
+        self.suspended = slot.is_none();
+        if let Some(slot) = slot {
+            if self.active != slot {
+                self.switch_to(slot);
+                self.applied.clear();
+            }
+            if self.focused.is_none_or(|id| !self.is_visible(id)) {
+                self.focused = self.workspaces[slot].focused;
+            }
+        } else {
+            self.focused = None;
+            self.scratchpad_visible = false;
+        }
+        self.relayout()
+    }
+
+    pub fn active_space_id(&self) -> Option<u64> {
+        (!self.suspended).then_some(self.space_ids[self.active])
+    }
+
+    /// Explicitly moving a shown scratchpad window turns it into a regular tile.
+    pub fn release_scratchpad(&mut self, id: WindowId) {
+        if self
+            .windows
+            .get(&id)
+            .is_some_and(|m| m.location == Location::Scratchpad)
+        {
+            self.scratchpad.retain(|w| *w != id);
+            self.scratchpad_home.remove(&id);
+            self.attach(id, self.active);
+        }
     }
 
     // --- events from the platform -------------------------------------------
 
     pub fn add_window(&mut self, win: NewWindow) -> Vec<Command> {
-        if self.windows.contains_key(&win.id) {
+        if self.suspended || self.windows.contains_key(&win.id) {
             return Vec::new();
         }
         let floating = win.prefers_floating || self.config.should_float(&win.app);
@@ -194,6 +304,9 @@ impl Wm {
             return Vec::new();
         };
         self.applied.remove(&id);
+        self.hidden.remove(&id);
+        self.minimums.remove(&id);
+        self.scratchpad_home.remove(&id);
         let was_focused = self.focused == Some(id);
         match managed.location {
             Location::Workspace(i) => self.detach(id, i),
@@ -212,31 +325,29 @@ impl Wm {
     }
 
     /// The OS reports that `id` became focused (click, Cmd-Tab, app activation).
-    /// Mirrors Hyprland `focus_on_activate = true`: jump to its workspace.
+    /// Native Space changes are observed separately; stale focus never switches desktops.
     pub fn on_focus_changed(&mut self, id: WindowId) -> Vec<Command> {
-        let Some(location) = self.windows.get(&id).map(|m| m.location) else {
-            return Vec::new();
-        };
-        if self.focused == Some(id) {
+        if !self.is_visible(id) || self.focused == Some(id) {
             return Vec::new();
         }
-        let mut out = Vec::new();
         self.focused = Some(id);
-        if let Location::Workspace(i) = location {
-            self.workspaces[i].focused = Some(id);
-            if i != self.active {
-                self.switch_to(i);
-                out.extend(self.relayout());
-            }
+        if let Some(Location::Workspace(slot)) = self.windows.get(&id).map(|m| m.location) {
+            self.workspaces[slot].focused = Some(id);
         }
-        out
+        Vec::new()
     }
 
     /// The user moved/resized a floating window by hand.
     pub fn on_frame_changed(&mut self, id: WindowId, frame: Rect) {
-        if self.is_hidden_frame(&frame) {
+        // A stretched floating window must retain its pre-fullscreen frame.
+        if self
+            .workspaces
+            .iter()
+            .any(|ws| ws.fullscreen.is_some_and(|(f, _)| f == id))
+        {
             return;
         }
+        let frame = frame.contained_in(self.visible);
         if let Some(m) = self.windows.get_mut(&id) {
             if m.floating {
                 m.float_frame = frame;
@@ -263,25 +374,98 @@ impl Wm {
         self.relayout()
     }
 
-    /// Moves every hidden window back on screen, e.g. before exiting, so no
-    /// window is left stranded in the corner.
+    /// Restore only the windows hidden by Tyler, leaving manually minimized
+    /// windows to the user. Frames remain inside the usable display.
     pub fn restore_all(&mut self) -> Vec<Command> {
-        let mut out = Vec::new();
-        let area = self.tiling_area();
-        let mut ids: Vec<_> = self.windows.keys().copied().collect();
+        let mut ids: Vec<_> = self.hidden.drain().collect();
         ids.sort_unstable();
-        for (n, id) in ids.into_iter().enumerate() {
-            let offset = (n % 10) as f64 * 30.0;
-            let frame = Rect::new(area.x + offset, area.y + offset, area.w * 0.6, area.h * 0.6);
-            if self
-                .applied
-                .get(&id)
-                .is_some_and(|r| self.is_hidden_frame(r))
-            {
-                out.push(Command::SetFrame(id, frame));
+        let mut out = Vec::new();
+        for id in ids {
+            out.push(Command::SetVisible(id, true));
+            if let Some(frame) = self.applied.get(&id) {
+                out.push(Command::SetFrame(id, frame.contained_in(self.visible)));
             }
         }
         out
+    }
+
+    /// An app that cannot fit its tile remains usable as a floating window.
+    pub fn float_uncooperative(&mut self, id: WindowId, actual: Rect) -> Vec<Command> {
+        let Some(Location::Workspace(ws)) = self.windows.get(&id).map(|m| m.location) else {
+            return Vec::new();
+        };
+        self.detach(id, ws);
+        let frame = actual.contained_in(self.visible);
+        let m = self.windows.get_mut(&id).unwrap();
+        m.floating = true;
+        m.float_frame = frame;
+        self.attach(id, ws);
+        if self.focused == Some(id) {
+            self.workspaces[ws].focused = Some(id);
+        }
+        self.applied.remove(&id);
+        self.relayout()
+    }
+
+    pub fn on_tile_rejected(&mut self, id: WindowId, desired: Rect, actual: Rect) -> Vec<Command> {
+        self.on_tiles_rejected(&[(id, desired, actual)])
+    }
+
+    /// Learn all settled rejections before recomputing a layout. Sequentially
+    /// repairing each window emits intermediate layouts that invalidate the
+    /// next window's request and make the desktop visibly jump several times.
+    pub fn on_tiles_rejected(&mut self, rejected: &[(WindowId, Rect, Rect)]) -> Vec<Command> {
+        let rejected: Vec<_> = rejected
+            .iter()
+            .copied()
+            .filter(|(id, desired, _)| {
+                self.is_visible(*id)
+                    && !self.is_floating(*id)
+                    && self
+                        .applied
+                        .get(id)
+                        .is_some_and(|frame| frame.approx_eq(desired))
+            })
+            .collect();
+        if rejected.is_empty() {
+            return Vec::new();
+        }
+        for (id, desired, actual) in &rejected {
+            let min = self.minimums.entry(*id).or_insert((100.0, 100.0));
+            if actual.w > desired.w + 2.0 {
+                min.0 = min.0.max(actual.w);
+            }
+            if actual.h > desired.h + 2.0 {
+                min.1 = min.1.max(actual.h);
+            }
+        }
+        let area = self.tiling_area();
+        let gaps = self.config.gaps();
+        if self.workspaces[self.active]
+            .tree
+            .constrain(area, gaps, &self.minimums)
+        {
+            let commands = self.relayout();
+            if !commands.is_empty() {
+                return commands;
+            }
+        }
+        // An impossible layout (or a window refusing even a valid position)
+        // must remain usable. Clear accumulated intermediate frame commands;
+        // emit only the final arrangement once all fallbacks are decided.
+        let mut commands = Vec::new();
+        for (id, _, actual) in rejected {
+            commands.extend(self.float_uncooperative(id, actual));
+            if self.workspaces[self.active]
+                .tree
+                .constrain(area, gaps, &self.minimums)
+            {
+                break;
+            }
+        }
+        commands.retain(|c| !matches!(c, Command::SetFrame(..)));
+        commands.extend(self.force_relayout());
+        commands
     }
 
     // --- actions --------------------------------------------------------------
@@ -297,6 +481,8 @@ impl Wm {
                 url: url.clone(),
             }],
             Action::Reload => vec![Command::ReloadConfig],
+            Action::ShowKeybindings => vec![Command::ShowKeybindings],
+            Action::FocusMonitor { forward } => vec![Command::FocusMonitor { forward: *forward }],
             Action::Quit => {
                 let mut out = self.restore_all();
                 out.push(Command::Quit);
@@ -318,7 +504,7 @@ impl Wm {
             Action::Swap(dir) => self.swap(*dir),
             Action::Workspace(target) => self.goto_workspace(*target),
             Action::MoveToWorkspace { workspace, follow } => {
-                self.move_to_workspace(workspace - 1, *follow)
+                self.move_to_workspace(*workspace, *follow)
             }
             Action::Resize { dx, dy } => self.resize(*dx, *dy),
             Action::CycleNext { forward } => self.cycle(*forward),
@@ -341,7 +527,7 @@ impl Wm {
 
     fn clamp_to_visible(&self, r: Rect) -> Rect {
         let a = self.tiling_area();
-        if r.w <= 0.0 || r.h <= 0.0 || self.is_hidden_frame(&r) {
+        if r.w <= 0.0 || r.h <= 0.0 {
             return self.default_float_frame();
         }
         let w = r.w.min(a.w);
@@ -419,13 +605,7 @@ impl Wm {
     fn visible_frames(&self) -> Vec<(WindowId, Rect)> {
         self.desired_frames()
             .into_iter()
-            .filter(|(id, r)| {
-                !self.is_hidden_frame(r)
-                    && self.windows.get(id).is_some_and(|m| match m.location {
-                        Location::Workspace(i) => i == self.active,
-                        Location::Scratchpad => self.scratchpad_visible,
-                    })
-            })
+            .filter(|(id, _)| self.is_visible(*id))
             .collect()
     }
 
@@ -473,7 +653,7 @@ impl Wm {
             .get_mut(&id)
             .expect("focused window is managed");
         m.floating = !m.floating;
-        if m.floating && self.applied.get(&id).is_none() {
+        if m.floating && !self.applied.contains_key(&id) {
             m.float_frame = default_frame;
         }
         self.attach(id, ws);
@@ -485,7 +665,8 @@ impl Wm {
         let Some(id) = self.focused else {
             return Vec::new();
         };
-        if self.workspace_of(id) != Some(self.active + 1) {
+        if !matches!(self.windows.get(&id).map(|m| m.location), Some(Location::Workspace(slot)) if slot == self.active)
+        {
             return Vec::new();
         }
         let ws = &mut self.workspaces[self.active];
@@ -544,61 +725,57 @@ impl Wm {
     }
 
     fn goto_workspace(&mut self, target: WorkspaceTarget) -> Vec<Command> {
-        let ws = match target {
-            WorkspaceTarget::Index(n) => n - 1,
-            WorkspaceTarget::Previous => self.previous,
+        let slot = match target {
+            WorkspaceTarget::Index(n) => self.native_order.get(n.wrapping_sub(1)).copied(),
+            WorkspaceTarget::Previous => self
+                .native_order
+                .contains(&self.previous)
+                .then_some(self.previous),
             WorkspaceTarget::Relative(step) => {
-                let mut existing: Vec<usize> = (0..WORKSPACE_COUNT)
-                    .filter(|&i| i == self.active || !self.workspaces[i].windows().is_empty())
+                let existing: Vec<_> = self
+                    .native_order
+                    .iter()
+                    .copied()
+                    .filter(|&slot| {
+                        slot == self.active
+                            || self.native_occupied.contains(&slot)
+                            || !self.workspaces[slot].windows().is_empty()
+                    })
                     .collect();
-                existing.sort_unstable();
-                let pos = existing.iter().position(|&i| i == self.active).unwrap_or(0) as i32;
-                let len = existing.len() as i32;
-                existing[(pos + step).rem_euclid(len) as usize]
+                if existing.is_empty() {
+                    return Vec::new();
+                }
+                let pos = existing
+                    .iter()
+                    .position(|&slot| slot == self.active)
+                    .unwrap_or(0) as i32;
+                Some(existing[(pos + step).rem_euclid(existing.len() as i32) as usize])
             }
         };
-        if ws == self.active {
-            return Vec::new();
-        }
-        self.switch_to(ws);
-        let target = self.workspaces[ws]
-            .focused
-            .or_else(|| self.workspaces[ws].windows().last().copied());
-        match target {
-            Some(id) => self.focus_window(id),
-            None => {
-                self.focused = None;
-                self.relayout()
+        match slot {
+            Some(slot) if slot != self.active || self.suspended => {
+                vec![Command::FocusSpace(self.space_ids[slot])]
             }
+            _ => Vec::new(),
         }
     }
 
-    fn move_to_workspace(&mut self, target: usize, follow: bool) -> Vec<Command> {
+    fn move_to_workspace(&mut self, number: usize, follow: bool) -> Vec<Command> {
         let Some(id) = self.focused else {
             return Vec::new();
         };
-        let Some(m) = self.windows.get(&id) else {
+        let Some(&slot) = self.native_order.get(number.wrapping_sub(1)) else {
             return Vec::new();
         };
-        match m.location {
-            Location::Workspace(cur) if cur == target => return Vec::new(),
-            Location::Workspace(cur) => self.detach(id, cur),
-            Location::Scratchpad => self.scratchpad.retain(|w| *w != id),
+        if slot == self.active {
+            return Vec::new();
         }
-        self.attach(id, target);
-        self.workspaces[target].focused = Some(id);
-        if follow {
-            self.switch_to(target);
-            return self.focus_window(id);
-        }
-        self.focused = None;
-        let next = self.workspaces[self.active]
-            .focused
-            .or_else(|| self.workspaces[self.active].windows().last().copied());
-        match next {
-            Some(n) => self.focus_window(n),
-            None => self.relayout(),
-        }
+        // Commit membership only after the native operation has succeeded and been observed.
+        vec![Command::MoveToSpace {
+            window: id,
+            space: self.space_ids[slot],
+            follow,
+        }]
     }
 
     fn move_to_scratchpad(&mut self) -> Vec<Command> {
@@ -617,6 +794,7 @@ impl Wm {
             m.floating = true;
             m.location = Location::Scratchpad;
         }
+        self.scratchpad_home.insert(id, self.active);
         self.scratchpad.push(id);
         self.focused = None;
         match self.workspaces[self.active].focused {
@@ -626,9 +804,18 @@ impl Wm {
     }
 
     fn toggle_scratchpad(&mut self) -> Vec<Command> {
-        self.scratchpad_visible = !self.scratchpad_visible && !self.scratchpad.is_empty();
+        self.scratchpad_visible = !self.scratchpad_visible
+            && self
+                .scratchpad
+                .iter()
+                .any(|id| self.scratchpad_home.get(id) == Some(&self.active));
         if self.scratchpad_visible {
-            if let Some(&top) = self.scratchpad.last() {
+            if let Some(&top) = self
+                .scratchpad
+                .iter()
+                .rev()
+                .find(|id| self.scratchpad_home.get(id) == Some(&self.active))
+            {
                 return self.focus_window(top);
             }
         }
@@ -642,27 +829,17 @@ impl Wm {
     }
 
     fn desired_frames(&self) -> Vec<(WindowId, Rect)> {
-        let (hx, hy) = self.hidden_origin();
+        if self.suspended {
+            return Vec::new();
+        }
         let area = self.tiling_area();
         let gaps = self.config.gaps();
         let mut out = Vec::new();
-        let hidden = |id: WindowId, r: Option<Rect>| {
-            let (w, h) = r
-                .map(|r| (r.w, r.h))
-                .unwrap_or((area.w * 0.5, area.h * 0.5));
-            (id, Rect::new(hx, hy, w, h))
-        };
         for (i, ws) in self.workspaces.iter().enumerate() {
-            let tiled = ws.tree.layout(area, gaps);
             if i != self.active {
-                for (id, r) in tiled {
-                    out.push(hidden(id, Some(r)));
-                }
-                for &id in &ws.floating {
-                    out.push(hidden(id, Some(self.windows[&id].float_frame)));
-                }
                 continue;
             }
+            let tiled = ws.tree.layout(area, gaps);
             for (id, r) in tiled {
                 let frame = match ws.fullscreen {
                     Some((f, FullscreenMode::Fullscreen)) if f == id => self.display,
@@ -675,18 +852,18 @@ impl Wm {
                 let frame = match ws.fullscreen {
                     Some((f, FullscreenMode::Fullscreen)) if f == id => self.display,
                     Some((f, FullscreenMode::Maximized)) if f == id => area.inset(gaps.outer),
-                    _ => self.windows[&id].float_frame,
+                    _ => self.windows[&id].float_frame.contained_in(area),
                 };
                 out.push((id, frame));
             }
         }
-        for &id in &self.scratchpad {
-            let f = self.windows[&id].float_frame;
-            out.push(if self.scratchpad_visible {
-                (id, f)
-            } else {
-                hidden(id, Some(f))
-            });
+        if self.scratchpad_visible {
+            for &id in &self.scratchpad {
+                if self.scratchpad_home.get(&id) != Some(&self.active) {
+                    continue;
+                }
+                out.push((id, self.windows[&id].float_frame.contained_in(area)));
+            }
         }
         out
     }
@@ -694,6 +871,31 @@ impl Wm {
     /// Emits `SetFrame` for every window whose desired frame changed.
     fn relayout(&mut self) -> Vec<Command> {
         let mut out = Vec::new();
+        if !self.minimums.is_empty() {
+            let area = self.tiling_area();
+            let gaps = self.config.gaps();
+            for ws in &mut self.workspaces {
+                ws.tree.constrain(area, gaps, &self.minimums);
+            }
+        }
+        let mut ids = self.managed_windows();
+        ids.sort_unstable();
+        // macOS handles desktop visibility. Only explicit scratchpad windows
+        // may generate minimize/restore commands.
+        for id in &ids {
+            if self.windows[id].location == Location::Scratchpad
+                && !self.is_visible(*id)
+                && self.hidden.insert(*id)
+            {
+                out.push(Command::SetVisible(*id, false));
+            }
+        }
+        for id in ids {
+            if self.is_visible(id) && self.hidden.remove(&id) {
+                out.push(Command::SetVisible(id, true));
+                self.applied.remove(&id);
+            }
+        }
         for (id, frame) in self.desired_frames() {
             let unchanged = self.applied.get(&id).is_some_and(|r| r.approx_eq(&frame));
             if !unchanged {
@@ -714,11 +916,51 @@ mod tests {
 
     fn wm() -> Wm {
         let user = "[general]\ngaps_in = 0\ngaps_out = 0\n[rules]\nfloat = [\"Calculator\"]\n";
-        Wm::new(
+        let mut wm = Wm::new(
             Config::from_layers(crate::config::DEFAULT_CONFIG, Some(user)).unwrap(),
             DISPLAY,
             VISIBLE,
-        )
+        );
+        let desktops = (1..=10).map(|n| (n * 100, Vec::new())).collect::<Vec<_>>();
+        wm.sync_native_desktops(&desktops, Some(100));
+        wm
+    }
+
+    // Model successful OS confirmations separately from the requested command.
+    fn perform(wm: &mut Wm, action: &Action) -> Vec<Command> {
+        let commands = wm.handle(action);
+        let mut desktops: Vec<_> = wm
+            .native_order
+            .iter()
+            .map(|&slot| (wm.space_ids[slot], wm.workspaces[slot].windows()))
+            .collect();
+        let mut active = wm.active_space_id();
+        for command in &commands {
+            match command {
+                Command::FocusSpace(space) => active = Some(*space),
+                Command::MoveToSpace {
+                    window,
+                    space,
+                    follow,
+                } => {
+                    for (_, members) in &mut desktops {
+                        members.retain(|id| id != window);
+                    }
+                    desktops
+                        .iter_mut()
+                        .find(|(id, _)| id == space)
+                        .unwrap()
+                        .1
+                        .push(*window);
+                    if *follow {
+                        active = Some(*space);
+                    }
+                }
+                _ => {}
+            }
+        }
+        wm.sync_native_desktops(&desktops, active);
+        commands
     }
 
     fn open(wm: &mut Wm, id: WindowId) -> Vec<Command> {
@@ -732,6 +974,50 @@ mod tests {
 
     fn frame(wm: &Wm, id: WindowId) -> Rect {
         wm.frame_of(id).unwrap()
+    }
+
+    #[test]
+    fn simultaneous_size_rejections_are_learned_before_emitting_a_layout() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        open(&mut wm, 2);
+        let rejected: Vec<_> = [1, 2]
+            .into_iter()
+            .map(|id| {
+                let desired = frame(&wm, id);
+                (
+                    id,
+                    desired,
+                    Rect::new(desired.x, desired.y, desired.w + 100.0, desired.h),
+                )
+            })
+            .collect();
+        let commands = wm.on_tiles_rejected(&rejected);
+        for (id, desired, _) in rejected {
+            assert_eq!(wm.minimums[&id].0, desired.w + 100.0);
+            assert!(!wm.is_floating(id));
+            assert!(frame(&wm, id).w >= wm.minimums[&id].0);
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|c| matches!(c, Command::SetFrame(w, _) if *w == id))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn old_rejections_cannot_change_constraints_after_a_new_layout() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        let old = frame(&wm, 1);
+        open(&mut wm, 2);
+        assert!(wm
+            .on_tiles_rejected(&[(1, old, Rect::new(old.x, old.y, old.w + 100.0, old.h))])
+            .is_empty());
+        assert!(wm.minimums.is_empty());
+        assert!(!wm.is_floating(1));
     }
 
     #[test]
@@ -777,6 +1063,30 @@ mod tests {
     }
 
     #[test]
+    fn closed_tile_stays_removed_when_native_membership_lags_and_another_opens() {
+        let mut wm = wm();
+        for id in 1..=3 {
+            open(&mut wm, id);
+        }
+        wm.remove_window(1);
+        let covered_area = |wm: &Wm, ids: &[WindowId]| {
+            ids.iter()
+                .map(|id| {
+                    let rect = frame(wm, *id);
+                    rect.w * rect.h
+                })
+                .sum::<f64>()
+        };
+        assert_eq!(covered_area(&wm, &[2, 3]), VISIBLE.w * VISIBLE.h);
+        // Native desktop queries can still include the destroyed window.
+        wm.sync_native_desktops(&[(100, vec![1, 2, 3])], Some(100));
+        open(&mut wm, 4);
+        assert!(!wm.is_managed(1));
+        assert_eq!(wm.workspaces[wm.active].tree.windows().len(), 3);
+        assert_eq!(covered_area(&wm, &[2, 3, 4]), VISIBLE.w * VISIBLE.h);
+    }
+
+    #[test]
     fn focus_and_swap_directionally() {
         let mut wm = wm();
         open(&mut wm, 1);
@@ -790,20 +1100,130 @@ mod tests {
     }
 
     #[test]
-    fn workspaces_hide_and_show_windows() {
+    fn observed_native_desktops_select_their_own_layouts() {
         let mut wm = wm();
         open(&mut wm, 1);
-        wm.handle(&Action::Workspace(WorkspaceTarget::Index(2)));
+        perform(&mut wm, &Action::Workspace(WorkspaceTarget::Index(2)));
         assert_eq!(wm.active_workspace(), 2);
-        assert!(wm.is_hidden_frame(&frame(&wm, 1)));
+        assert!(!wm.is_visible(1));
         assert_eq!(wm.focused(), None);
         open(&mut wm, 2);
         assert_eq!(wm.workspace_of(2), Some(2));
-        wm.handle(&Action::Workspace(WorkspaceTarget::Previous));
+        perform(&mut wm, &Action::Workspace(WorkspaceTarget::Previous));
         assert_eq!(wm.active_workspace(), 1);
         assert!(frame(&wm, 1).approx_eq(&VISIBLE));
-        assert!(wm.is_hidden_frame(&frame(&wm, 2)));
+        assert!(!wm.is_visible(2));
         assert_eq!(wm.focused(), Some(1));
+    }
+
+    #[test]
+    fn native_workspace_requests_never_minimize_or_commit_before_confirmation() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        assert_eq!(
+            wm.handle(&Action::MoveToWorkspace {
+                workspace: 2,
+                follow: true
+            }),
+            vec![Command::MoveToSpace {
+                window: 1,
+                space: 200,
+                follow: true
+            }]
+        );
+        assert_eq!(
+            wm.workspace_of(1),
+            Some(1),
+            "a failed move must not change native membership"
+        );
+        let requested = wm.handle(&Action::Workspace(WorkspaceTarget::Index(2)));
+        assert_eq!(requested, vec![Command::FocusSpace(200)]);
+        assert_eq!(
+            wm.active_workspace(),
+            1,
+            "failed native switch must leave model unchanged"
+        );
+        let observed = wm.sync_native_desktops(&[(100, vec![1]), (200, vec![])], Some(200));
+        assert!(!observed
+            .iter()
+            .any(|c| matches!(c, Command::SetVisible(..))));
+        assert_eq!(wm.active_workspace(), 2);
+        assert!(
+            wm.restore_all().is_empty(),
+            "ordinary desktops require no restoration"
+        );
+        assert!(
+            wm.handle(&Action::Workspace(WorkspaceTarget::Index(3)))
+                .is_empty(),
+            "no phantom desktops"
+        );
+    }
+
+    #[test]
+    fn deleted_native_desktops_are_not_selectable_and_scratchpads_stay_local() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        let scratch = wm.handle(&Action::MoveToScratchpad);
+        assert!(scratch.contains(&Command::SetVisible(1, false)));
+        wm.sync_native_desktops(&[(100, vec![1]), (200, vec![])], Some(200));
+        assert!(wm.handle(&Action::ToggleScratchpad).is_empty());
+        assert!(!wm.is_visible(1));
+        wm.sync_native_desktops(&[(100, vec![1])], Some(100));
+        assert!(wm
+            .handle(&Action::Workspace(WorkspaceTarget::Previous))
+            .is_empty());
+        assert!(wm
+            .handle(&Action::ToggleScratchpad)
+            .contains(&Command::SetVisible(1, true)));
+    }
+
+    #[test]
+    fn cycling_includes_occupied_native_desktops_before_they_have_been_visited() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        wm.sync_native_desktops(&[(100, vec![1]), (200, vec![42])], Some(100));
+        assert!(!wm.is_managed(42));
+        assert_eq!(
+            wm.handle(&Action::Workspace(WorkspaceTarget::Relative(1))),
+            vec![Command::FocusSpace(200)]
+        );
+        assert_eq!(wm.occupied_workspaces(), vec![1, 2]);
+    }
+
+    #[test]
+    fn native_reordering_preserves_layout_and_external_moves_reconcile() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        open(&mut wm, 2);
+        let before = frame(&wm, 1);
+        wm.sync_native_desktops(&[(200, vec![]), (100, vec![1, 2])], Some(100));
+        assert_eq!(wm.active_workspace(), 2);
+        assert_eq!(frame(&wm, 1), before);
+        wm.sync_native_desktops(&[(200, vec![2]), (100, vec![1])], Some(100));
+        assert_eq!(wm.workspace_of(2), Some(1));
+        assert_eq!(frame(&wm, 1), VISIBLE);
+        assert_eq!(wm.focused(), Some(1));
+        let suspended = wm.sync_native_desktops(&[(200, vec![2]), (100, vec![1])], None);
+        assert!(suspended.is_empty());
+        assert!(wm.active_space_id().is_none());
+        assert!(wm.handle(&Action::ToggleFloat).is_empty());
+    }
+
+    #[test]
+    fn app_minimum_size_adapts_layout_then_floats_if_impossible() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        open(&mut wm, 2);
+        let desired = frame(&wm, 2);
+        wm.on_tile_rejected(2, desired, Rect::new(800.0, 25.0, 1000.0, 975.0));
+        assert!(!wm.is_floating(2));
+        assert_eq!(frame(&wm, 2).w, 1000.0);
+        let desired = frame(&wm, 2);
+        wm.on_tile_rejected(2, desired, Rect::new(800.0, 25.0, 2000.0, 1200.0));
+        assert!(wm.is_floating(2));
+        assert_eq!(wm.workspaces[wm.active].focused, Some(2));
+        assert_eq!(frame(&wm, 2), VISIBLE);
+        assert_eq!(frame(&wm, 1), VISIBLE);
     }
 
     #[test]
@@ -811,19 +1231,25 @@ mod tests {
         let mut wm = wm();
         open(&mut wm, 1);
         open(&mut wm, 2);
-        wm.handle(&Action::MoveToWorkspace {
-            workspace: 3,
-            follow: false,
-        });
+        perform(
+            &mut wm,
+            &Action::MoveToWorkspace {
+                workspace: 3,
+                follow: false,
+            },
+        );
         assert_eq!(wm.active_workspace(), 1);
         assert_eq!(wm.workspace_of(2), Some(3));
-        assert!(wm.is_hidden_frame(&frame(&wm, 2)));
+        assert!(!wm.is_visible(2));
         assert!(frame(&wm, 1).approx_eq(&VISIBLE));
         assert_eq!(wm.focused(), Some(1));
-        wm.handle(&Action::MoveToWorkspace {
-            workspace: 3,
-            follow: true,
-        });
+        perform(
+            &mut wm,
+            &Action::MoveToWorkspace {
+                workspace: 3,
+                follow: true,
+            },
+        );
         assert_eq!(wm.active_workspace(), 3);
         assert_eq!(wm.focused(), Some(1));
         assert!(frame(&wm, 2).approx_eq(&Rect::new(0.0, 25.0, 800.0, 975.0)));
@@ -834,23 +1260,29 @@ mod tests {
     fn relative_workspace_cycles_through_occupied() {
         let mut wm = wm();
         open(&mut wm, 1);
-        wm.handle(&Action::MoveToWorkspace {
-            workspace: 4,
-            follow: false,
-        });
+        perform(
+            &mut wm,
+            &Action::MoveToWorkspace {
+                workspace: 4,
+                follow: false,
+            },
+        );
         open(&mut wm, 2);
-        wm.handle(&Action::MoveToWorkspace {
-            workspace: 7,
-            follow: false,
-        });
+        perform(
+            &mut wm,
+            &Action::MoveToWorkspace {
+                workspace: 7,
+                follow: false,
+            },
+        );
         // Active 1 (empty), occupied 4 and 7.
-        wm.handle(&Action::Workspace(WorkspaceTarget::Relative(1)));
+        perform(&mut wm, &Action::Workspace(WorkspaceTarget::Relative(1)));
         assert_eq!(wm.active_workspace(), 4);
-        wm.handle(&Action::Workspace(WorkspaceTarget::Relative(1)));
+        perform(&mut wm, &Action::Workspace(WorkspaceTarget::Relative(1)));
         assert_eq!(wm.active_workspace(), 7);
-        wm.handle(&Action::Workspace(WorkspaceTarget::Relative(1)));
+        perform(&mut wm, &Action::Workspace(WorkspaceTarget::Relative(1)));
         assert_eq!(wm.active_workspace(), 4);
-        wm.handle(&Action::Workspace(WorkspaceTarget::Relative(-1)));
+        perform(&mut wm, &Action::Workspace(WorkspaceTarget::Relative(-1)));
         assert_eq!(wm.active_workspace(), 7);
     }
 
@@ -903,6 +1335,48 @@ mod tests {
     }
 
     #[test]
+    fn stretch_focuses_without_hiding_and_allows_switching_windows() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        open(&mut wm, 2);
+        let before = frame(&wm, 2);
+        let action = Action::Fullscreen(FullscreenMode::Fullscreen);
+        assert_eq!(
+            wm.handle(&action),
+            vec![Command::SetFrame(2, DISPLAY), Command::Focus(2)]
+        );
+        assert!(wm.is_visible(1) && wm.is_visible(2));
+        // An external app/window switch must not raise the stretched window again.
+        assert!(wm.on_focus_changed(1).is_empty());
+        assert_eq!(wm.focused(), Some(1));
+        assert_eq!(frame(&wm, 2), DISPLAY);
+        assert!(wm.on_focus_changed(2).is_empty());
+        assert_eq!(
+            wm.handle(&action),
+            vec![Command::SetFrame(2, before), Command::Focus(2)]
+        );
+    }
+
+    #[test]
+    fn floating_stretch_restores_original_frame_after_observation_and_switch() {
+        let mut wm = wm();
+        open(&mut wm, 1);
+        open(&mut wm, 2);
+        wm.handle(&Action::ToggleFloat);
+        let original = Rect::new(100.0, 150.0, 600.0, 400.0);
+        wm.on_frame_changed(2, original);
+        let action = Action::Fullscreen(FullscreenMode::Fullscreen);
+        wm.handle(&action);
+        wm.on_frame_changed(2, DISPLAY);
+        wm.on_focus_changed(1);
+        wm.force_relayout();
+        assert_eq!(frame(&wm, 2), DISPLAY);
+        wm.on_focus_changed(2);
+        wm.handle(&action);
+        assert_eq!(frame(&wm, 2), original);
+    }
+
+    #[test]
     fn resize_tiled_and_floating() {
         let mut wm = wm();
         open(&mut wm, 1);
@@ -927,29 +1401,33 @@ mod tests {
         open(&mut wm, 1);
         open(&mut wm, 2);
         wm.handle(&Action::MoveToScratchpad);
-        assert!(wm.is_hidden_frame(&frame(&wm, 2)));
+        assert!(!wm.is_visible(2));
         assert!(frame(&wm, 1).approx_eq(&VISIBLE));
         wm.handle(&Action::ToggleScratchpad);
-        assert!(!wm.is_hidden_frame(&frame(&wm, 2)));
+        assert!(!!wm.is_visible(2));
         assert_eq!(wm.focused(), Some(2));
-        wm.handle(&Action::Workspace(WorkspaceTarget::Index(2)));
-        assert!(
-            wm.is_hidden_frame(&frame(&wm, 2)),
-            "scratchpad hides on workspace change"
-        );
+        perform(&mut wm, &Action::Workspace(WorkspaceTarget::Index(2)));
+        assert!(!wm.is_visible(2), "scratchpad hides on workspace change");
     }
 
     #[test]
-    fn external_focus_switches_workspace() {
+    fn stale_focus_cannot_switch_native_desktops() {
         let mut wm = wm();
         open(&mut wm, 1);
-        wm.handle(&Action::MoveToWorkspace {
-            workspace: 5,
-            follow: false,
-        });
+        perform(
+            &mut wm,
+            &Action::MoveToWorkspace {
+                workspace: 5,
+                follow: false,
+            },
+        );
         wm.on_focus_changed(1);
-        assert_eq!(wm.active_workspace(), 5);
-        assert!(!wm.is_hidden_frame(&frame(&wm, 1)));
+        assert_eq!(wm.active_workspace(), 1);
+        assert!(!wm.is_visible(1));
+        wm.sync_native_desktops(&[(100, vec![]), (500, vec![1])], Some(500));
+        wm.on_focus_changed(1);
+        assert_eq!(wm.active_space_id(), Some(500));
+        assert!(wm.is_visible(1));
     }
 
     #[test]
@@ -979,12 +1457,15 @@ mod tests {
             }]
         );
         open(&mut wm, 1);
-        wm.handle(&Action::MoveToWorkspace {
-            workspace: 2,
-            follow: false,
-        });
+        perform(
+            &mut wm,
+            &Action::MoveToWorkspace {
+                workspace: 2,
+                follow: false,
+            },
+        );
         let cmds = wm.handle(&Action::Quit);
-        assert!(matches!(cmds[0], Command::SetFrame(1, r) if !wm.is_hidden_frame(&r)));
+        assert!(!cmds.iter().any(|c| matches!(c, Command::SetVisible(..))));
         assert_eq!(cmds.last(), Some(&Command::Quit));
     }
 

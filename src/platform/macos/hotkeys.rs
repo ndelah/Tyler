@@ -4,10 +4,10 @@
 //! the focused application does not also see them (the same way Hyprland
 //! consumes Super bindings). The callback only enqueues the chord. Running
 //! Accessibility calls inside the tap deadlocks the event stream, so the run
-//! loop timer drains the queue.
+//! loop source drains the queue immediately after the callback returns.
 //!
-//! Creating the tap requires Accessibility permission (and, on recent macOS,
-//! Input Monitoring). Native callback tests construct events without posting
+//! Creating this filtering tap requires Accessibility permission.
+//! Native callback tests construct events without posting
 //! them; live event-tap installation still requires an interactive permission grant.
 
 use std::ffi::c_void;
@@ -56,6 +56,7 @@ extern "C" {
 pub fn install(
     queue: Arc<Mutex<Vec<Chord>>>,
     config: Arc<Mutex<Config>>,
+    wake: Arc<super::events::Wake>,
 ) -> Result<CGEventTap<'static>, ()> {
     let consumed = Mutex::new(KeyboardState::default());
     let tap = CGEventTap::new(
@@ -68,7 +69,13 @@ pub fn install(
             CGEventType::FlagsChanged,
         ],
         move |_proxy: CGEventTapProxy, event_type, event: &CGEvent| {
-            on_event(event_type, event, &queue, &config, &consumed)
+            let result = on_event(event_type, event, &queue, &config, &consumed);
+            if event_type as u32 == CGEventType::KeyDown as u32
+                && matches!(result, CallbackResult::Drop)
+            {
+                wake.signal(super::events::KEYS);
+            }
+            result
         },
     )?;
     let source = tap.mach_port().create_runloop_source(0).map_err(|_| ())?;
@@ -138,7 +145,10 @@ fn on_event(
         let config = config
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        config.action_for(chord).map(crate::action::Action::repeats)
+        config
+            .action_for(chord)
+            .filter(|a| config.permits(a))
+            .map(crate::action::Action::repeats)
     };
     let down = kind == CGEventType::KeyDown as u32;
     // Pair either representation if Fn is released before the navigation key.
@@ -149,8 +159,7 @@ fn on_event(
     if !swallow {
         return CallbackResult::Keep;
     }
-    if down && decision.is_some() {
-        let repeats = decision.unwrap();
+    if let (true, Some(repeats)) = (down, decision) {
         let autorepeat = event
             .get_integer_value_field(core_graphics::event::EventField::KEYBOARD_EVENT_AUTOREPEAT)
             != 0;
@@ -209,6 +218,51 @@ mod tests {
         }
         event.set_flags(flags);
         event
+    }
+
+    #[test]
+    fn disabled_modules_pass_shortcuts_through_native_callback() {
+        let mut builtin = Config::builtin();
+        builtin.tiling_enabled = false;
+        let desktop = builtin
+            .bindings
+            .iter()
+            .find(|b| {
+                b.action
+                    == crate::action::Action::Workspace(crate::action::WorkspaceTarget::Index(1))
+            })
+            .unwrap()
+            .chord;
+        let tile = builtin
+            .bindings
+            .iter()
+            .find(|b| b.action == crate::action::Action::ToggleFloat)
+            .unwrap()
+            .chord;
+        let config = Mutex::new(builtin);
+        let queue = Mutex::new(Vec::new());
+        let consumed = Mutex::new(KeyboardState::default());
+        for enabled in [true, false] {
+            config.lock().unwrap().navigator.enabled = enabled;
+            for (chord, should_capture) in [(desktop, enabled), (tile, false)] {
+                let result = on_event(
+                    CGEventType::KeyDown,
+                    &event(chord, true),
+                    &queue,
+                    &config,
+                    &consumed,
+                );
+                assert_eq!(matches!(result, CallbackResult::Drop), should_capture);
+                on_event(
+                    CGEventType::KeyUp,
+                    &event(chord, false),
+                    &queue,
+                    &config,
+                    &consumed,
+                );
+                queue.lock().unwrap().clear();
+            }
+        }
     }
 
     #[test]

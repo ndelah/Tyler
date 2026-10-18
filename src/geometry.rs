@@ -30,6 +30,19 @@ impl Rect {
         (self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
 
+    /// Keep a window inside the usable display, including after an app refuses
+    /// to shrink. Oversized windows retain an accessible top-left corner.
+    pub fn contained_in(self, area: Rect) -> Rect {
+        let w = self.w.min(area.w).max(1.0);
+        let h = self.h.min(area.h).max(1.0);
+        Rect::new(
+            self.x.clamp(area.x, area.max_x() - w),
+            self.y.clamp(area.y, area.max_y() - h),
+            w,
+            h,
+        )
+    }
+
     /// Shrinks the rect by `amount` on every side, never below zero size.
     pub fn inset(&self, amount: f64) -> Rect {
         self.inset_sides(amount, amount, amount, amount)
@@ -170,6 +183,20 @@ fn overlap_1d(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_resize_still_keeps_whole_window_inside_display() {
+        let usable = Rect::new(0.0, 30.0, 1792.0, 1090.0);
+        let codex = Rect::new(901.0, 30.0, 1792.0, 1090.0);
+        assert_eq!(codex.contained_in(usable), usable);
+        let oversized = Rect::new(1791.0, 1119.0, 2000.0, 1400.0);
+        assert_eq!(oversized.contained_in(usable), usable);
+        let offset_display = Rect::new(-1600.0, 100.0, 1600.0, 900.0);
+        assert_eq!(
+            Rect::new(20.0, -20.0, 800.0, 500.0).contained_in(offset_display),
+            Rect::new(-800.0, 100.0, 800.0, 500.0)
+        );
+    }
 
     #[test]
     fn split_horizontal_and_vertical() {

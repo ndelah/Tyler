@@ -18,7 +18,7 @@ use crate::geometry::Rect;
 /// which case windows can extend under the menu bar and the Dock.
 pub fn main_screen() -> (Rect, Rect) {
     if let Some(mtm) = MainThreadMarker::new() {
-        if let Some(screen) = NSScreen::mainScreen(mtm) {
+        if let Some(screen) = NSScreen::screens(mtm).firstObject() {
             let frame = screen.frame();
             let visible = screen.visibleFrame();
             let height = frame.size.height;

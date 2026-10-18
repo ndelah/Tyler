@@ -68,7 +68,9 @@ echo "Installed ${dest}/tyler-tiler"
 apps="${HOME}/Applications"
 mkdir -p "$apps"
 ditto "${src}/target/Tyler.app" "$apps/Tyler.app"
-echo "Installed ${apps}/Tyler.app — open it from Finder; no terminal needed."
+echo "Installed ${apps}/Tyler.app"
+echo "Set up native Mission Control desktops: sh ${src}/scripts/setup-native-spaces.sh"
+echo "Enable yabai and Tyler under Accessibility, then open Tyler.app from Finder."
 case ":${PATH}:" in
   *":${dest}:"*) ;;
   *)

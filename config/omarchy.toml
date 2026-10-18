@@ -16,7 +16,7 @@
 super = "cmd"
 gaps_in = 5
 gaps_out = 10
-# Reserved: macOS has no compositor hook for borders (see plan, milestone 4).
+# Active-window outline in Tyler.app; set width to 0 to hide it.
 border_size = 2
 layout = "dwindle"
 default_bindings = true

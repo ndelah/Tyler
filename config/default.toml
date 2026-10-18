@@ -3,10 +3,13 @@
 # User settings override this file; default_bindings=false replaces the table.
 
 [general]
+# Independent from the desktop navigator.
+tiling_enabled = true
 super = "fn"
 gaps_in = 5
 gaps_out = 10
-border_size = 2
+border_size = 4
+border_color = "#586B4A"
 layout = "dwindle"
 default_bindings = true
 
@@ -14,6 +17,12 @@ default_bindings = true
 preserve_split = true
 force_split = 2
 split_ratio = 0.5
+
+# Prototype: enable to compare AX window motion against immediate tiling.
+# Native Mission Control transitions always belong to macOS.
+[animations]
+enabled = false
+duration_ms = 160
 
 [apps]
 terminal = "Terminal"
@@ -26,17 +35,20 @@ float = ["Tyler", "System Settings", "System Information", "Calculator", "Archiv
 [bindings]
 "SUPER + RETURN" = "launch terminal"
 "SUPER + B" = "launch browser"
+"SUPER + C" = "launch browser"
 "SUPER + O" = "launch file_manager"
-"SUPER + X" = "killactive"
+"SUPER + F" = "launch file_manager"
+"SUPER + K" = "keybindings"
 "SUPER + T" = "togglefloating"
 "SUPER + J" = "togglesplit"
-"SUPER + G" = "fullscreen"
-"SUPER + U" = "fullscreen maximized"
+"SUPER + SHIFT + F" = "fullscreen"
 "SUPER + TAB" = "workspace e+1"
 "SUPER + SHIFT + TAB" = "workspace e-1"
 "SUPER + GRAVE" = "workspace previous"
-"SUPER + BRACKETRIGHT" = "cyclenext"
-"SUPER + BRACKETLEFT" = "cyclenext prev"
+"SUPER + BRACKETLEFT" = "cyclenext"
+"SUPER + BRACKETRIGHT" = "cyclenext prev"
+"SUPER + APOSTROPHE" = "focusmonitor next"
+"SUPER + BACKSLASH" = "focusmonitor prev"
 "SUPER + V" = "togglespecialworkspace scratchpad"
 "SUPER + SHIFT + V" = "movetoworkspacesilent special:scratchpad"
 "SUPER + R" = "reload"
@@ -49,6 +61,20 @@ float = ["Tyler", "System Settings", "System Information", "Calculator", "Archiv
 "SUPER + SHIFT + UP" = "swapwindow u"
 "SUPER + DOWN" = "movefocus d"
 "SUPER + SHIFT + DOWN" = "swapwindow d"
+# Resize: minus shrinks, equal expands; Shift selects height.
+# Option = a little (25 pt), no extra modifier = 100 pt, Control = a lot (300 pt).
+"SUPER + MINUS" = "resizeactive -100 0"
+"SUPER + EQUAL" = "resizeactive 100 0"
+"SUPER + SHIFT + MINUS" = "resizeactive 0 -100"
+"SUPER + SHIFT + EQUAL" = "resizeactive 0 100"
+"SUPER + ALT + MINUS" = "resizeactive -25 0"
+"SUPER + ALT + EQUAL" = "resizeactive 25 0"
+"SUPER + SHIFT + ALT + MINUS" = "resizeactive 0 -25"
+"SUPER + SHIFT + ALT + EQUAL" = "resizeactive 0 25"
+"SUPER + CTRL + MINUS" = "resizeactive -300 0"
+"SUPER + CTRL + EQUAL" = "resizeactive 300 0"
+"SUPER + CTRL + SHIFT + MINUS" = "resizeactive 0 -300"
+"SUPER + CTRL + SHIFT + EQUAL" = "resizeactive 0 300"
 "SUPER + code:10" = "workspace 1"
 "SUPER + SHIFT + code:10" = "movetoworkspace 1"
 "SUPER + code:11" = "workspace 2"
@@ -69,11 +95,11 @@ float = ["Tyler", "System Settings", "System Information", "Calculator", "Archiv
 "SUPER + SHIFT + code:18" = "movetoworkspace 9"
 "SUPER + code:19" = "workspace 10"
 "SUPER + SHIFT + code:19" = "movetoworkspace 10"
-"SUPER + code:20" = "resizeactive -100 0"
-"SUPER + code:21" = "resizeactive 100 0"
-"SUPER + SHIFT + code:20" = "resizeactive 0 -100"
-"SUPER + SHIFT + code:21" = "resizeactive 0 100"
-"SUPER + COMMA" = "resizeactive -25 0"
-"SUPER + PERIOD" = "resizeactive 25 0"
-"SUPER + SHIFT + COMMA" = "resizeactive 0 -25"
-"SUPER + SHIFT + PERIOD" = "resizeactive 0 25"
+
+# Native desktop strip below the macOS menu bar, independent of tiling.
+[navigator]
+enabled = true
+# Names/icons are keyed by native Space ID (use Settings → Desktops).
+# [navigator.labels."379"]
+# name = "Development"
+# icon = "sf:terminal" # Or an emoji; leave empty to display the name.

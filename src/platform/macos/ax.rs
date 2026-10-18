@@ -4,12 +4,12 @@
 //! Matching an AX element to a `CGWindowID` uses `_AXUIElementGetWindow`. That
 //! symbol is not in the public headers, but it ships in ApplicationServices
 //! and does not require disabling SIP; AeroSpace and yabai resolve it the
-//! same way. Nothing in this module has been executed — it only typechecks
-//! under `cargo check --target aarch64-apple-darwin`.
+//! same way.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::Arc;
 
 use accessibility_sys::{
     error_string, kAXCloseButtonAttribute, kAXErrorSuccess, kAXFocusedApplicationAttribute,
@@ -71,6 +71,9 @@ pub struct ObservedWindow {
     pub app: String,
     pub frame: Rect,
     pub prefers_floating: bool,
+    pub on_screen: bool,
+    pub minimized: bool,
+    pub fullscreen: bool,
     pub element: AxElement,
 }
 
@@ -80,14 +83,27 @@ extern "C" {
     fn _AXUIElementGetWindow(element: AXUIElementRef, wid: *mut u32) -> AXError;
 }
 
-const AX_TIMEOUT_SECS: f32 = 0.4;
+const AX_TIMEOUT_SECS: f32 = 0.1;
+
+/// An invalid element is definitive even while a native Space still lists its ID.
+/// Timeouts and other AX errors are not evidence that a window was closed.
+pub fn is_destroyed(element: &AxElement) -> bool {
+    let role = CFString::new(kAXRoleAttribute);
+    let mut value: CFTypeRef = ptr::null();
+    let error =
+        unsafe { AXUIElementCopyAttributeValue(element.0, role.as_concrete_TypeRef(), &mut value) };
+    if !value.is_null() {
+        unsafe { CFRelease(value) };
+    }
+    error == accessibility_sys::kAXErrorInvalidUIElement
+}
 
 /// Every manageable window currently in the window list.
 ///
 /// Hung apps are bounded by [`AX_TIMEOUT_SECS`] so one stuck process cannot
 /// stall the run loop for the AX default of several seconds.
-pub fn observe_windows() -> Vec<ObservedWindow> {
-    let mut by_pid: HashMap<i32, Vec<CgWindow>> = HashMap::new();
+pub fn observe_windows(known: &[(WindowId, &AxElement, &str)]) -> Vec<ObservedWindow> {
+    let mut by_pid: HashMap<i32, (String, Vec<CgWindow>)> = HashMap::new();
     for window in cg_windows() {
         let candidate = WindowCandidate {
             layer: window.layer,
@@ -96,25 +112,38 @@ pub fn observe_windows() -> Vec<ObservedWindow> {
             minimized: false,
         };
         if candidate.should_manage() {
-            by_pid.entry(window.pid).or_default().push(window);
+            by_pid
+                .entry(window.pid)
+                .or_insert_with(|| (window.owner.clone(), Vec::new()))
+                .1
+                .push(window);
         }
     }
 
+    // Minimized windows may disappear from CGWindowList; their AX windows
+    // must remain discoverable so a workspace can restore them.
+    for (_, element, owner) in known {
+        let mut pid = 0;
+        if unsafe { accessibility_sys::AXUIElementGetPid(element.0, &mut pid) } == kAXErrorSuccess {
+            by_pid
+                .entry(pid)
+                .or_insert_with(|| (owner.to_string(), Vec::new()));
+        }
+    }
     let mut observed = Vec::new();
-    for (pid, cg) in by_pid {
+    for (pid, (owner, cg)) in by_pid {
         let Some(app) = application(pid) else {
             continue;
         };
-        // Electron/Chrome hide their AX tree until this is set. Failures are
-        // expected for AppKit apps and ignored.
-        let _ = set_bool(&app, "AXManualAccessibility", true);
-        let _ = set_bool(&app, "AXEnhancedUserInterface", true);
-        let owner = cg.first().map(|w| w.owner.clone()).unwrap_or_default();
+        // Observers enable AXManualAccessibility once when an app appears.
         for element in copy_elements(&app, kAXWindowsAttribute) {
+            let _ = unsafe { AXUIElementSetMessagingTimeout(element.0, AX_TIMEOUT_SECS) };
             let Some(id) = cg_window_id(&element) else {
                 continue;
             };
-            if !cg.iter().any(|w| w.id == id) {
+            if !cg.iter().any(|w| w.id == id)
+                && !known.iter().any(|(known_id, _, _)| *known_id == id)
+            {
                 continue;
             }
             let minimized = copy_bool(&element, kAXMinimizedAttribute).unwrap_or(false);
@@ -122,7 +151,7 @@ pub fn observe_windows() -> Vec<ObservedWindow> {
                 layer: 0,
                 owner: owner.clone(),
                 alpha: 1.0,
-                minimized,
+                minimized: false,
             };
             if !candidate.should_manage() {
                 continue;
@@ -133,7 +162,8 @@ pub fn observe_windows() -> Vec<ObservedWindow> {
             }
             let subrole = copy_string(&element, kAXSubroleAttribute).unwrap_or_default();
             let prefers_floating = role == kAXSheetRole
-                || (!subrole.is_empty() && subrole != kAXStandardWindowSubrole);
+                || (!subrole.is_empty() && subrole != kAXStandardWindowSubrole)
+                || size_is_fixed(&element);
             let frame =
                 ax_frame(&element).or_else(|| cg.iter().find(|w| w.id == id).map(|w| w.bounds));
             let Some(frame) = frame else { continue };
@@ -145,6 +175,9 @@ pub fn observe_windows() -> Vec<ObservedWindow> {
                 app: owner.clone(),
                 frame,
                 prefers_floating,
+                minimized,
+                fullscreen: copy_bool(&element, "AXFullScreen").unwrap_or(false),
+                on_screen: cg.iter().find(|w| w.id == id).is_some_and(|w| w.on_screen),
                 element,
             });
         }
@@ -161,29 +194,315 @@ pub fn focused_window_id() -> Option<WindowId> {
     cg_window_id(&window)
 }
 
-/// Moves and resizes `element`. Size is applied first: several AppKit apps
-/// reject a position that, combined with the old size, would land off screen.
-pub fn set_frame(element: &AxElement, frame: Rect) {
-    if let Err(error) = set_size(element, frame.w, frame.h) {
-        log::debug!("AXSize: {}", error_string(error));
+/// AppKit/Electron can constrain the first resize using the old position.
+/// Apply size, position, size with enhanced-UI animations temporarily disabled,
+/// then read back the result rather than assuming AX accepted the request.
+/// Distinguish a genuine app size constraint from a transport failure/timeout.
+/// A timed-out write must never teach the layout that the old size is a minimum.
+pub fn apply_frame(element: &AxElement, frame: Rect, area: Rect) -> (Option<Rect>, bool) {
+    let _session = FrameSession::new(element);
+    let before = ax_frame(element);
+    let mut accepted = set_frame_step(element, before, frame).is_ok();
+    // Retry size only when the old position actually constrained the resize.
+    // Do not send every window the same resize twice unconditionally.
+    if ax_frame(element)
+        .is_some_and(|r| (r.w - frame.w).abs() >= 2.0 || (r.h - frame.h).abs() >= 2.0)
+    {
+        accepted &= set_size(element, frame.w, frame.h).is_ok();
     }
-    if let Err(error) = set_point(element, kAXPositionAttribute, frame.x, frame.y) {
-        log::debug!("AXPosition: {}", error_string(error));
+    let actual = ax_frame(element);
+    if let Some(actual) = actual {
+        let safe = actual.contained_in(area);
+        if !safe.approx_eq(&actual) {
+            accepted &= set_size(element, safe.w, safe.h).is_ok();
+            accepted &= set_point(element, kAXPositionAttribute, safe.x, safe.y).is_ok();
+        }
     }
+    (ax_frame(element).or(actual), accepted)
+}
+
+pub fn frame(element: &AxElement) -> Option<Rect> {
+    ax_frame(element)
+}
+
+/// Animation steps do only changed writes; validation happens once at the
+/// destination after the application has had time to settle.
+pub fn set_frame_step(
+    element: &AxElement,
+    previous: Option<Rect>,
+    next: Rect,
+) -> Result<(), AXError> {
+    if previous.is_none_or(|r| (r.w - next.w).abs() >= 0.5 || (r.h - next.h).abs() >= 0.5) {
+        set_size(element, next.w, next.h)?;
+    }
+    if previous.is_none_or(|r| (r.x - next.x).abs() >= 0.5 || (r.y - next.y).abs() >= 0.5) {
+        set_point(element, kAXPositionAttribute, next.x, next.y)?;
+    }
+    Ok(())
+}
+
+/// Retained for the whole tween, then restored on completion or cancellation.
+pub struct FrameSession {
+    pid: Option<i32>,
+    _main_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+thread_local! {
+    static FRAME_SESSIONS: std::cell::RefCell<HashMap<i32, (usize, AxElement)>> = std::cell::RefCell::new(HashMap::new());
+}
+
+impl FrameSession {
+    pub fn new(element: &AxElement) -> Self {
+        let mut pid = 0;
+        let pid = (unsafe { accessibility_sys::AXUIElementGetPid(element.0, &mut pid) }
+            == kAXErrorSuccess)
+            .then_some(pid)
+            .filter(|pid| {
+                FRAME_SESSIONS.with(|sessions| {
+                    let mut sessions = sessions.borrow_mut();
+                    if let Some((count, _)) = sessions.get_mut(pid) {
+                        *count += 1;
+                        return true;
+                    }
+                    let Some(app) = application(*pid) else {
+                        return false;
+                    };
+                    if copy_bool(&app, "AXEnhancedUserInterface") != Some(true)
+                        || set_bool(&app, "AXEnhancedUserInterface", false).is_err()
+                    {
+                        return false;
+                    }
+                    sessions.insert(*pid, (1, app));
+                    true
+                })
+            });
+        Self {
+            pid,
+            _main_thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for FrameSession {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            FRAME_SESSIONS.with(|sessions| {
+                let mut sessions = sessions.borrow_mut();
+                if let Some((count, _)) = sessions.get_mut(&pid) {
+                    *count -= 1;
+                    if *count == 0 {
+                        let (_, app) = sessions.remove(&pid).unwrap();
+                        let _ = set_bool(&app, "AXEnhancedUserInterface", true);
+                    }
+                }
+            });
+        }
+    }
+}
+
+fn size_is_fixed(element: &AxElement) -> bool {
+    let mut settable = 1;
+    let attribute = CFString::new(kAXSizeAttribute);
+    unsafe {
+        accessibility_sys::AXUIElementIsAttributeSettable(
+            element.0,
+            attribute.as_concrete_TypeRef(),
+            &mut settable,
+        ) == kAXErrorSuccess
+            && settable == 0
+    }
+}
+
+struct AppObserver {
+    observer: accessibility_sys::AXObserverRef,
+    _app: AxElement,
+    windows: HashMap<WindowId, AxElement>,
+}
+
+impl Drop for AppObserver {
+    fn drop(&mut self) {
+        unsafe {
+            core_foundation::runloop::CFRunLoopRemoveSource(
+                core_foundation::runloop::CFRunLoopGetCurrent(),
+                accessibility_sys::AXObserverGetRunLoopSource(self.observer),
+                core_foundation::runloop::kCFRunLoopCommonModes,
+            );
+            CFRelease(self.observer.cast());
+        }
+    }
+}
+
+pub struct Observers {
+    apps: HashMap<i32, AppObserver>,
+    wake: Arc<super::events::Wake>,
+}
+
+impl Observers {
+    pub fn new(wake: Arc<super::events::Wake>) -> Self {
+        Self {
+            apps: HashMap::new(),
+            wake,
+        }
+    }
+
+    pub fn watch_apps(&mut self) {
+        let running = objc2_app_kit::NSWorkspace::sharedWorkspace().runningApplications();
+        let pids: std::collections::HashSet<_> = running
+            .iter()
+            .map(|app| app.processIdentifier())
+            .filter(|pid| *pid > 0 && *pid as u32 != std::process::id())
+            .collect();
+        self.apps.retain(|pid, _| pids.contains(pid));
+        for pid in pids {
+            if self.apps.contains_key(&pid) {
+                continue;
+            }
+            let Some(app) = application(pid) else {
+                continue;
+            };
+            let _ = set_bool(&app, "AXManualAccessibility", true);
+            let mut observer = ptr::null_mut();
+            if unsafe { accessibility_sys::AXObserverCreate(pid, on_notification, &mut observer) }
+                != kAXErrorSuccess
+            {
+                continue;
+            }
+            for notification in [
+                "AXWindowCreated",
+                "AXFocusedWindowChanged",
+                "AXApplicationHidden",
+                "AXApplicationShown",
+            ] {
+                self.subscribe(observer, &app, notification);
+            }
+            unsafe {
+                core_foundation::runloop::CFRunLoopAddSource(
+                    core_foundation::runloop::CFRunLoopGetCurrent(),
+                    accessibility_sys::AXObserverGetRunLoopSource(observer),
+                    core_foundation::runloop::kCFRunLoopCommonModes,
+                );
+            }
+            self.apps.insert(
+                pid,
+                AppObserver {
+                    observer,
+                    _app: app,
+                    windows: HashMap::new(),
+                },
+            );
+        }
+    }
+
+    pub fn watch_windows(&mut self, windows: &[ObservedWindow]) {
+        let live: std::collections::HashSet<_> = windows.iter().map(|w| w.id).collect();
+        for observer in self.apps.values_mut() {
+            observer.windows.retain(|id, element| {
+                if live.contains(id) {
+                    return true;
+                }
+                for name in WINDOW_NOTIFICATIONS {
+                    let notification = CFString::new(name);
+                    unsafe {
+                        accessibility_sys::AXObserverRemoveNotification(
+                            observer.observer,
+                            element.0,
+                            notification.as_concrete_TypeRef(),
+                        );
+                    }
+                }
+                false
+            });
+        }
+        for window in windows {
+            let mut pid = 0;
+            if unsafe { accessibility_sys::AXUIElementGetPid(window.element.0, &mut pid) }
+                != kAXErrorSuccess
+            {
+                continue;
+            }
+            let Some(observer) = self.apps.get(&pid) else {
+                continue;
+            };
+            if observer.windows.contains_key(&window.id) {
+                continue;
+            }
+            for name in WINDOW_NOTIFICATIONS {
+                self.subscribe(observer.observer, &window.element, name);
+            }
+            self.apps
+                .get_mut(&pid)
+                .unwrap()
+                .windows
+                .insert(window.id, AxElement::retain(window.element.0).unwrap());
+        }
+    }
+
+    fn subscribe(
+        &self,
+        observer: accessibility_sys::AXObserverRef,
+        element: &AxElement,
+        name: &str,
+    ) {
+        let notification = CFString::new(name);
+        // Some apps omit individual notifications. The periodic reconciliation
+        // remains as a fallback; unsupported events never prevent tiling.
+        unsafe {
+            accessibility_sys::AXObserverAddNotification(
+                observer,
+                element.0,
+                notification.as_concrete_TypeRef(),
+                Arc::as_ptr(&self.wake).cast_mut().cast(),
+            );
+        }
+    }
+}
+
+const WINDOW_NOTIFICATIONS: [&str; 7] = [
+    "AXUIElementDestroyed",
+    "AXWindowMoved",
+    "AXWindowResized",
+    "AXMoved",
+    "AXResized",
+    "AXWindowMiniaturized",
+    "AXWindowDeminiaturized",
+];
+
+unsafe extern "C" fn on_notification(
+    _: accessibility_sys::AXObserverRef,
+    _: AXUIElementRef,
+    notification: CFStringRef,
+    context: *mut c_void,
+) {
+    let name = CFString::wrap_under_get_rule(notification);
+    let flags = match name.to_string().as_str() {
+        "AXMoved" | "AXResized" | "AXWindowMoved" | "AXWindowResized" => super::events::GEOMETRY,
+        "AXFocusedWindowChanged" => super::events::FOCUS,
+        _ => super::events::WINDOWS,
+    };
+    (&*context.cast::<super::events::Wake>()).signal(flags);
+}
+
+pub fn set_minimized(element: &AxElement, minimized: bool) -> bool {
+    set_bool(element, kAXMinimizedAttribute, minimized).is_ok()
+        && copy_bool(element, kAXMinimizedAttribute) == Some(minimized)
 }
 
 /// Raises the window and brings its application forward.
 pub fn focus(element: &AxElement) {
-    let action = CFString::new(kAXRaiseAction);
-    let error = unsafe { AXUIElementPerformAction(element.0, action.as_concrete_TypeRef()) };
-    if error != kAXErrorSuccess {
-        log::debug!("AXRaise: {}", error_string(error));
-    }
     let mut pid: i32 = 0;
     if unsafe { accessibility_sys::AXUIElementGetPid(element.0, &mut pid) } == kAXErrorSuccess {
         if let Some(app) = application(pid) {
             let _ = set_bool(&app, kAXFrontmostAttribute, true);
         }
+    }
+    // Activation can select another window in the same app. Explicitly make
+    // our target main/key before raising it above the other normal windows.
+    let _ = set_bool(element, "AXMain", true);
+    let _ = set_bool(element, "AXFocused", true);
+    let action = CFString::new(kAXRaiseAction);
+    let error = unsafe { AXUIElementPerformAction(element.0, action.as_concrete_TypeRef()) };
+    if error != kAXErrorSuccess {
+        log::debug!("AXRaise: {}", error_string(error));
     }
 }
 
@@ -207,6 +526,7 @@ struct CgWindow {
     layer: i64,
     alpha: f64,
     bounds: Rect,
+    on_screen: bool,
 }
 
 fn cg_windows() -> Vec<CgWindow> {
@@ -242,6 +562,12 @@ fn cg_windows() -> Vec<CgWindow> {
             layer,
             alpha,
             bounds,
+            on_screen: dict_value(
+                &dict,
+                CFString::new("kCGWindowIsOnscreen").as_concrete_TypeRef(),
+            )
+            .and_then(|v| v.downcast::<CFBoolean>())
+            .is_some_and(bool::from),
         });
     }
     windows
