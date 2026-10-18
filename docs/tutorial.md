@@ -338,11 +338,15 @@ navigator** are independent; press **Save Changes** to apply. With tiling off,
 desktop navigation stays available and tiling shortcuts pass through to apps.
 With both off, Tyler stays available for Settings and Quit.
 
-The navigator appears immediately below the existing macOS menu bar on the main
-display, clear of the notch and existing status icons. Desktop numbers match
-Mission Control order and Tyler's configured shortcuts: Fn + 1…9 and Fn + 0 for
-desktop 10 by default. Click a desktop to switch; the current one is highlighted.
-Long rows scroll horizontally, and native fullscreen Spaces hide the strip.
+The navigator appears inside the existing macOS menu-bar band on the main
+display. Choose **Left**, **Center**, or **Right** in **Menu bar placement**, then
+**Save Changes**. Placement uses available space and avoids app menus, status icons,
+and the notch. Center placement moves beside the camera housing when needed.
+Desktop numbers match Mission Control order and Tyler's configured shortcuts:
+Fn + 1…9 and Fn + 0 for desktop 10 by default. Click to switch desktops.
+Crowded bars scroll horizontally and keep the current desktop visible. With no
+safe space, an auto-hidden menu bar, or native fullscreen, the navigator hides;
+shortcuts still work, and reopening Tyler from Finder opens Settings.
 
 Give each desktop a name or an emoji / SF Symbol (`sf:briefcase`, `sf:house`,
 `sf:terminal`). An icon replaces its visible name; the tooltip retains the name
@@ -351,8 +355,8 @@ unsaved labels. Names are saved against native Space IDs and survive Tyler resta
 and desktop reordering. Deleted/recreated desktops or new macOS Space IDs need
 naming again. This does not change Mission Control's own desktop titles.
 
-When tiling is enabled, Tyler reserves the strip's height in its own layout.
-Navigator-only mode leaves freely positioned windows unchanged. The existing
+The navigator uses no extra vertical space. Tiling respects macOS's normal usable
+area; navigator-only mode leaves windows unchanged. The existing
 yabai backend is still required; the navigator itself is implemented in Rust
 using native AppKit controls, with no SketchyBar dependency.
 

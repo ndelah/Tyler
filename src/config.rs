@@ -47,16 +47,28 @@ pub struct Animations {
 #[serde(default, deny_unknown_fields)]
 pub struct Navigator {
     pub enabled: bool,
+    pub placement: NavigatorPlacement,
     pub labels: BTreeMap<String, DesktopLabel>,
 }
 impl Default for Navigator {
     fn default() -> Self {
         Self {
             enabled: true,
+            placement: NavigatorPlacement::Center,
             labels: BTreeMap::new(),
         }
     }
 }
+/// Alignment within unoccupied menu-bar space, never across the camera housing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NavigatorPlacement {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DesktopLabel {

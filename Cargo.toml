@@ -1,6 +1,6 @@
 [package]
 name = "tyler-tiler"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Native desktop navigator and optional automatic tiling for macOS"
@@ -26,7 +26,7 @@ accessibility-sys = "0.2.0"
 core-foundation = "0.10.1"
 core-graphics = "0.25.0"
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSScreen", "NSWorkspace", "NSRunningApplication", "NSAccessibility", "NSApplication", "NSPanel", "NSWindow", "NSView", "NSControl", "NSSegmentedControl", "NSScrollView", "NSClipView", "NSVisualEffectView", "NSImage", "NSFont", "NSColor", "NSGraphics", "NSStatusBar", "NSBitmapImageRep", "NSImageRep", "NSResponder", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSScreen", "NSWorkspace", "NSRunningApplication", "NSAccessibility", "NSApplication", "NSPanel", "NSWindow", "NSView", "NSControl", "NSCell", "NSSegmentedControl", "NSScrollView", "NSClipView", "NSVisualEffectView", "NSImage", "NSFont", "NSColor", "NSGraphics", "NSStatusBar", "NSBitmapImageRep", "NSImageRep", "NSResponder", "objc2-core-foundation"] }
 libc = "0.2"
 objc2-foundation = "0.3.2"
 block2 = "0.6.2"

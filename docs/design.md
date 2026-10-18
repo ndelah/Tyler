@@ -3,10 +3,19 @@
 The Rust worker owns a native AppKit nonactivating panel containing a segmented
 control and horizontal scroll view. It runs AppKit's event loop, sharing the existing
 CFRunLoop sources, keyboard tap, configuration watcher, and native desktop snapshot.
-The panel occupies a 36-point strip below the macOS menu bar on the main display;
-screen safe-area geometry keeps it outside the camera housing. The current desktop
-stays selected and visible; fullscreen Spaces hide the strip. Standard system fonts,
-materials, selection, and image rendering follow macOS appearance.
+The transparent panel occupies the system menu-bar band, without an extra row or
+reserved tiling height. `navigator.placement` accepts `left`, `center` (default),
+and `right`. The placement solver subtracts foreground AX menu item bounds,
+WindowServer menu-extra bounds, and the NSScreen camera housing. It aligns within
+a safe gap, shrinking to a scroll viewport on busy bars and hiding if no gap remains.
+Foreground changes rescan immediately; menu-extra geometry refreshes every 250 ms.
+If AX menu discovery fails, it hides conservatively. Hidden menu bars and native
+fullscreen Spaces hide the controls. Standard system fonts and controls follow macOS.
+
+This is a nonactivating menu-bar overlay, not an NSStatusItem: public status-item
+APIs do not expose arbitrary left/center/right placement. The panel stays below
+system dropdown menus. Menu-extra bounds and camera behavior need live hardware
+verification; no private status-item positioning preferences are written.
 
 `src/navigator.rs` derives numbers and shortcut hints from the same filtered Space
 order and resolved bindings used by Tyler. Labels in `[navigator.labels]` use native
@@ -19,8 +28,7 @@ No SketchyBar source or runtime is used.
 `general.tiling_enabled` and `navigator.enabled` are independent. Disabling tiling
 cancels frame writes, restores explicit scratchpads, clears tracked layout state,
 and releases tiling shortcuts. Desktop shortcuts use native focus requests directly
-in navigator-only mode. Disabling the navigator removes the strip and releases its
-reserved space in Tyler's layout. Both disabled leave an idle Settings host. The
+in navigator-only mode. Disabling the navigator removes its controls without changing the usable layout area. Both disabled leave an idle Settings host. The
 existing yabai IPC backend remains responsible for querying and switching desktops.
 
 Validation includes stable identity/numbering tests, independent shortcut capture,

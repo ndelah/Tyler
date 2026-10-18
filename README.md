@@ -68,13 +68,16 @@ Use **Settings** to edit shortcuts, choose apps, adjust gaps and the active-wind
 
 ## Desktop navigator
 
-Tyler draws a native AppKit desktop strip from Rust, immediately below the macOS
-menu bar on the main display. The strip leaves application menus and existing
-status icons available, and stays below the camera housing on notched displays.
-Click a desktop to switch; its number follows the same Mission Control ordering
-as Tyler's shortcuts (Fn + 1…9, Fn + 0 for desktop 10 by default). The selected
-desktop is highlighted. Long rows scroll horizontally, keeping the selection visible.
-Native fullscreen Spaces hide the strip.
+Tyler draws native AppKit desktop controls from Rust inside the macOS menu-bar
+band on the main display. Choose **Left**, **Center**, or **Right** placement in
+**Settings → Desktops**. Alignment uses unoccupied space around application menus,
+status icons, and the camera housing; center placement moves beside a notch.
+Click a desktop to switch; its number matches Tyler's shortcuts (Fn + 1…9,
+Fn + 0 for desktop 10 by default). The current desktop is highlighted.
+Crowded bars use a smaller horizontal scroll viewport with the current desktop
+kept visible. If no safe space remains, or the system menu bar is hidden, the
+controls hide; desktop shortcuts and reopening Tyler for Settings remain available.
+Native fullscreen Spaces also hide the controls.
 
 In **Settings → Desktops**, enable **automatic tiling** and **desktop navigator**
 independently. Give each desktop a saved name or icon: an emoji or an SF Symbol
@@ -88,8 +91,7 @@ and across Tyler restarts. Removing/recreating desktops or macOS assigning new I
 requires naming the new desktops again. No SketchyBar code or service is used;
 the existing yabai backend still supplies native desktop information and switching.
 Navigator-only mode releases tiling shortcuts and does not arrange windows.
-When both features run, Tyler reserves the strip's height in its own tiling area;
-freely positioned windows are not resized to avoid it.
+The navigator reserves no extra height: windows use the normal macOS usable area.
 
 For an offscreen native-control check without switching desktops or moving windows:
 

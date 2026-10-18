@@ -18,7 +18,7 @@ Grant Accessibility access to this copy of `target/Tyler.app`. Keep using the sa
 
 The native desktop backend requires yabai with Accessibility access; the setup script configures it with tiling disabled. SIP remains enabled.
 
-The app uses bundle identifier `com.ndelah.tyler`. The build script compiles the Rust worker, Rust AppKit desktop strip, and Swift menu bar launcher and Settings, then signs the bundle locally.
+The app uses bundle identifier `com.ndelah.tyler`. The build script compiles the Rust worker, Rust AppKit menu-bar desktop controls, and Swift menu bar launcher and Settings, then signs the bundle locally.
 
 ## Use the CLI
 

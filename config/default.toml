@@ -96,9 +96,10 @@ float = ["Tyler", "System Settings", "System Information", "Calculator", "Archiv
 "SUPER + code:19" = "workspace 10"
 "SUPER + SHIFT + code:19" = "movetoworkspace 10"
 
-# Native desktop strip below the macOS menu bar, independent of tiling.
+# Desktop controls inside the macOS menu bar, independent of tiling.
 [navigator]
 enabled = true
+placement = "center" # "left", "center", or "right" in available menu-bar space.
 # Names/icons are keyed by native Space ID (use Settings → Desktops).
 # [navigator.labels."379"]
 # name = "Development"

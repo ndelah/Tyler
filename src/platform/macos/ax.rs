@@ -750,3 +750,40 @@ fn dict_rect(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<
         rect.size.height,
     ))
 }
+
+/// App menus and on-screen menu extras in AX coordinates. Failing to read the
+/// foreground menu is conservative: do not draw over an unknown application menu.
+pub fn menu_bar_obstacles(front_pid: i32, bar: Rect) -> Option<Vec<Rect>> {
+    let app = application(front_pid)?;
+    let _ = unsafe { AXUIElementSetMessagingTimeout(app.0, 0.025) };
+    let menu = copy_element(&app, "AXMenuBar")?;
+    let children = copy_elements(&menu, "AXChildren");
+    if children.is_empty() {
+        return None;
+    }
+    let frames: Vec<Rect> = children.iter().filter_map(ax_frame).collect();
+    if frames.is_empty() {
+        return None;
+    }
+    // Treat the entire application-menu region as occupied, including gaps.
+    let end = frames.iter().map(Rect::max_x).fold(bar.x, f64::max);
+    let mut occupied = vec![Rect::new(bar.x, bar.y, end - bar.x, bar.h)];
+    // WindowServer supplies bounds even for menu extras that omit AX metadata.
+    // Exclude the full-width menu-bar backdrop and our own nonactivating panel.
+    occupied.extend(
+        cg_windows()
+            .into_iter()
+            .filter(|w| {
+                w.on_screen
+                    && w.layer >= 24
+                    && w.layer <= 25
+                    && w.alpha > 0.0
+                    && w.pid != std::process::id() as i32
+                    && w.bounds.w < bar.w * 0.9
+                    && w.bounds.y < bar.max_y()
+                    && w.bounds.max_y() > bar.y
+            })
+            .map(|w| w.bounds),
+    );
+    Some(occupied)
+}

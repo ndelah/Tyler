@@ -7,7 +7,7 @@ use objc2_app_kit::*;
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 use std::cell::Cell;
 
-pub const HEIGHT: f64 = 36.0;
+const CONTROL_HEIGHT: f64 = 22.0;
 
 define_class!(
     #[unsafe(super = NSObject)]
@@ -33,6 +33,9 @@ pub struct Navigator {
     frame: NSRect,
     shown: bool,
     ready: bool,
+    occupied: Option<Vec<Rect>>,
+    last_scan: std::time::Instant,
+    front_pid: i32,
 }
 
 impl Navigator {
@@ -50,7 +53,8 @@ impl Navigator {
         unsafe {
             panel.setReleasedWhenClosed(false);
         }
-        panel.setLevel(3); // Floating, below the system menu and its menus.
+        panel.setLevel(25); // Inside the menu-bar band; dropdown menus remain above it.
+        panel.setHasShadow(false);
         panel.setCollectionBehavior(
             NSWindowCollectionBehavior::CanJoinAllSpaces
                 | NSWindowCollectionBehavior::Stationary
@@ -75,7 +79,15 @@ impl Navigator {
             frame: NSRect::ZERO,
             shown: false,
             ready: false,
+            occupied: None,
+            last_scan: std::time::Instant::now(),
+            front_pid: 0,
         }
+    }
+
+    fn hide(&mut self) {
+        self.panel.orderOut(None);
+        self.shown = false;
     }
 
     pub fn take_selection(&mut self) -> Option<u64> {
@@ -107,17 +119,49 @@ impl Navigator {
             return;
         };
         let full = screen.frame();
-        // Retain the menu-bar band even when macOS is configured to auto-hide it.
-        let visible = screen.visibleFrame();
-        let max_y = full.origin.y + full.size.height;
-        let top = max_y
-            - (max_y - visible.origin.y - visible.size.height)
-                .max(screen.safeAreaInsets().top)
-                .max(NSStatusBar::systemStatusBar().thickness());
-        let frame = NSRect::new(
-            NSPoint::new(full.origin.x, top - HEIGHT),
-            NSSize::new(full.size.width, HEIGHT),
-        );
+        let height = NSStatusBar::systemStatusBar()
+            .thickness()
+            .max(screen.safeAreaInsets().top);
+        let bar = Rect::new(full.origin.x, 0.0, full.size.width, height);
+        let pid = NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|app| app.processIdentifier())
+            .unwrap_or(0);
+        if self.present && (pid != self.front_pid || self.last_scan.elapsed().as_millis() >= 250) {
+            self.occupied = super::ax::menu_bar_obstacles(pid, bar);
+            self.front_pid = pid;
+            self.last_scan = std::time::Instant::now();
+        }
+        let mut occupied = if self.present {
+            let Some(items) = self.occupied.clone() else {
+                self.hide();
+                return;
+            };
+            items
+        } else {
+            vec![]
+        };
+        // The area between these rectangles is the camera housing, not free space.
+        if screen.safeAreaInsets().top > 0.0 {
+            let left = screen.auxiliaryTopLeftArea();
+            let right = screen.auxiliaryTopRightArea();
+            occupied.push(Rect::new(
+                left.origin.x + left.size.width,
+                0.0,
+                right.origin.x - left.origin.x - left.size.width,
+                height,
+            ));
+        }
+        // Do not leave a floating row behind when the system menu bar is hidden.
+        if self.present
+            && full.origin.y + full.size.height
+                - screen.visibleFrame().origin.y
+                - screen.visibleFrame().size.height
+                < height - 1.0
+        {
+            self.hide();
+            return;
+        }
         let mut rows = crate::navigator::desktops(snapshot, config);
         if rows.is_empty() && !ready {
             rows.push(Desktop {
@@ -129,6 +173,21 @@ impl Navigator {
                 selected: false,
             });
         }
+        let desired = rows
+            .iter()
+            .map(|row| segment_width(&segment_label(row)))
+            .sum::<f64>()
+            + 4.0;
+        let Some(area) =
+            crate::navigator::menu_bar_frame(bar, &occupied, desired, config.navigator.placement)
+        else {
+            self.hide();
+            return;
+        };
+        let frame = NSRect::new(
+            NSPoint::new(area.x, full.origin.y + full.size.height - height),
+            NSSize::new(area.w, height),
+        );
         if self.shown && self.rows == rows && self.frame == frame && self.ready == ready {
             return;
         }
@@ -136,49 +195,30 @@ impl Navigator {
         self.frame = frame;
         self.ready = ready;
         self.panel.setFrame_display(frame, false);
-        let background = NSVisualEffectView::initWithFrame(
-            NSVisualEffectView::alloc(mtm),
-            NSRect::new(NSPoint::ZERO, frame.size),
-        );
-        background.setMaterial(NSVisualEffectMaterial::HeaderView);
-        background.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        background.setState(NSVisualEffectState::Active);
+        let background =
+            NSView::initWithFrame(NSView::alloc(mtm), NSRect::new(NSPoint::ZERO, frame.size));
         let scroll = NSScrollView::initWithFrame(
             NSScrollView::alloc(mtm),
             NSRect::new(
-                NSPoint::new(8.0, 2.0),
-                NSSize::new((frame.size.width - 16.0).max(1.0), HEIGHT - 4.0),
+                NSPoint::new(2.0, (height - CONTROL_HEIGHT) / 2.0),
+                NSSize::new((frame.size.width - 4.0).max(1.0), CONTROL_HEIGHT),
             ),
         );
         scroll.setDrawsBackground(false);
-        scroll.setHasHorizontalScroller(true);
+        scroll.setHasHorizontalScroller(false);
+        scroll.setHorizontalScrollElasticity(NSScrollElasticity::None);
         scroll.setAutohidesScrollers(true);
         let control = NSSegmentedControl::new(mtm);
         control.setSegmentCount(self.rows.len() as isize);
-        control.setSegmentStyle(NSSegmentStyle::Rounded);
+        control.setSegmentStyle(NSSegmentStyle::Automatic);
+        control.setControlSize(NSControlSize::Small);
         control.setTrackingMode(NSSegmentSwitchTracking::SelectOne);
         control.setFont(Some(&NSFont::systemFontOfSize(12.0)));
         let mut width = 0.0;
         let mut selected_bounds = None;
         for (i, row) in self.rows.iter().enumerate() {
             let i = i as isize;
-            let text = if row.icon.is_empty() {
-                row.name.clone()
-            } else if row.icon.starts_with("sf:") {
-                String::new()
-            } else {
-                row.icon.clone()
-            };
-            let label = if row.number == 0 {
-                text
-            } else {
-                format!(
-                    "{}{}{}",
-                    row.number,
-                    if text.is_empty() { "" } else { "  " },
-                    text
-                )
-            };
+            let label = segment_label(row);
             control.setLabel_forSegment(&NSString::from_str(&label), i);
             if let Some(symbol) = row.icon.strip_prefix("sf:") {
                 let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
@@ -187,7 +227,7 @@ impl Navigator {
                 );
                 control.setImage_forSegment(image.as_deref(), i);
             }
-            let segment_width = (label.chars().count() as f64 * 9.0 + 30.0).clamp(48.0, 240.0);
+            let segment_width = segment_width(&label);
             control.setWidth_forSegment(segment_width, i);
             control.setSelected_forSegment(row.selected, i);
             control.setEnabled_forSegment(ready, i);
@@ -206,14 +246,14 @@ impl Navigator {
             if row.selected {
                 selected_bounds = Some(NSRect::new(
                     NSPoint::new(width, 0.0),
-                    NSSize::new(segment_width, 28.0),
+                    NSSize::new(segment_width, CONTROL_HEIGHT),
                 ));
             }
             width += segment_width;
         }
         control.setFrame(NSRect::new(
             NSPoint::ZERO,
-            NSSize::new(width.max(1.0), 28.0),
+            NSSize::new(width.max(1.0), CONTROL_HEIGHT),
         ));
         unsafe {
             control.setTarget(Some(&self.target));
@@ -239,15 +279,31 @@ pub fn run_application() {
     app.run();
 }
 
-pub fn usable_screen(config: &Config) -> (Rect, Rect) {
-    let (full, mut visible) = super::screens::main_screen();
-    if config.navigator.enabled {
-        let top = visible.y.max(NSStatusBar::systemStatusBar().thickness());
-        let bottom = visible.y + visible.h;
-        visible.y = top + HEIGHT;
-        visible.h = (bottom - visible.y).max(1.0);
+pub fn usable_screen(_config: &Config) -> (Rect, Rect) {
+    super::screens::main_screen()
+}
+
+fn segment_label(row: &Desktop) -> String {
+    let text = if row.icon.is_empty() {
+        row.name.as_str()
+    } else if row.icon.starts_with("sf:") {
+        ""
+    } else {
+        row.icon.as_str()
+    };
+    if row.number == 0 {
+        text.to_owned()
+    } else {
+        format!(
+            "{}{}{}",
+            row.number,
+            if text.is_empty() { "" } else { "  " },
+            text
+        )
     }
-    (full, visible)
+}
+fn segment_width(label: &str) -> f64 {
+    (label.chars().count() as f64 * 7.0 + 24.0).clamp(36.0, 200.0)
 }
 
 /// Exercise actual AppKit controls offscreen without AX, yabai, or changing desktops.
@@ -313,7 +369,10 @@ pub fn check(preview: Option<&str>) -> Result<(), String> {
             .ok_or("missing content view")?;
         let bounds = NSRect::new(
             NSPoint::ZERO,
-            NSSize::new(640.0_f64.min(view.bounds().size.width), HEIGHT),
+            NSSize::new(
+                640.0_f64.min(view.bounds().size.width),
+                view.bounds().size.height,
+            ),
         );
         let bitmap = view
             .bitmapImageRepForCachingDisplayInRect(bounds)

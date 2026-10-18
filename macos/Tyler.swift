@@ -501,6 +501,7 @@ struct EditableDesktopLabel: Codable {
 }
 struct EditableNavigator: Codable {
     var enabled: Bool
+    var placement: String
     var labels: [String: EditableDesktopLabel]
 }
 struct EditableSettings: Codable {
@@ -966,7 +967,14 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             Toggle("Enable automatic tiling", isOn: setting(\.tiling_enabled, fallback: true))
             Toggle("Show desktop navigator", isOn: setting(\.navigator.enabled, fallback: true))
-            Text("Desktops appear below the macOS menu bar on the main display. Numbers follow Mission Control order and match your Tyler shortcuts.")
+            Picker("Menu bar placement", selection: setting(\.navigator.placement, fallback: "center")) {
+                Text("Left").tag("left")
+                Text("Center").tag("center")
+                Text("Right").tag("right")
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Menu bar placement")
+            Text("Desktops appear inside the menu bar on the main display. Placement uses available space around app menus, status icons, and the notch. Numbers match your Tyler shortcuts.")
                 .font(.callout).foregroundColor(.secondary)
             Divider()
             HStack {
@@ -995,7 +1003,7 @@ struct SettingsView: View {
                     }
                 }.padding(.vertical, 4)
             }
-            Text("An icon replaces the name in the strip; the name remains in its tooltip. Use an emoji or an Apple symbol such as sf:briefcase, sf:house, or sf:terminal. Names stay with existing desktops when reordered and across Tyler restarts. Deleted or recreated desktops have new identities.")
+            Text("An icon replaces the name in the menu bar; the name remains in its tooltip. Use an emoji or an Apple symbol such as sf:briefcase, sf:house, or sf:terminal. Names stay with existing desktops when reordered and across Tyler restarts. Deleted or recreated desktops have new identities.")
                 .font(.caption).foregroundColor(.secondary)
         }.padding(16)
     }
